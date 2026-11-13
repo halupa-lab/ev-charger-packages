@@ -12,8 +12,8 @@ The dashboard card lives in a separate repository: [ev-charger-card](https://git
 |---|---|
 | `ev_accounting.yaml` | Car power by source, kWh counters, grid cost in UAH, daily and monthly meters |
 | `ev_battery_hold.yaml` | "Hold home battery": raises Deye TOU program SOC while the car charges, restores it after |
-| `ev_night.yaml` | "Charge only at night": 23:00–07:00 |
-| `ev_safety.yaml` | No grid → stop charging; late night start after an HA restart; current ceiling 22 A |
+| `ev_night.yaml` | "Charge only at night": sets the timer 23:00–07:00 in the charger and keeps the charger clock right; 20 A when night charging starts |
+| `ev_safety.yaml` | No grid → stop charging (retried, push when it fails); current ceiling 22 A |
 
 ## Requirements
 
@@ -25,8 +25,9 @@ The dashboard card lives in a separate repository: [ev-charger-card](https://git
   ```
 
   `!include_dir_named` also reads sub-folders, so this repository can live in `/config/packages/ev/`. It skips files and folders whose names start with a dot (`.github`, `.yamllint`).
-- Integrations: [ElectroS EV Charger (Local)](https://github.com/podzolkov/electros-ev-local-ha) and [Solarman](https://github.com/davidrapan/ha-solarman) (`deye_p3` profile), with `number.deye_inverter_program_1_soc` … `_6_soc` enabled.
+- Integrations: the fork [electros-ev-local-ha](https://github.com/halupa-lab/electros-ev-local-ha) v1.7.0+ of ElectroS EV Charger (Local) (charger timer actions) and [Solarman](https://github.com/davidrapan/ha-solarman) (`deye_p3` profile), with `number.deye_inverter_program_1_soc` … `_6_soc` enabled.
 - A template sensor `sensor.grid_electricity_price` (current price, UAH/kWh).
+- The Home Assistant app on a phone for pushes (`notify.mobile_app_oleksiy_iphone`).
 
 ## Install
 

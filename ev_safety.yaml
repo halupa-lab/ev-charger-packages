@@ -14,8 +14,8 @@
 #    there is no grid (23:00, card button, ElectroS web UI) is stopped again.
 # 2) Grid (or data) is back for 2 minutes -> resume ONLY if charging was stopped by rule 1 and it is
 #    night with night mode on. In the day: only a notification. A manual stop is never undone.
-# 3) HA was restarting at 23:00 -> start the night charge late (only 23:00-23:30).
-# 4) Current ceiling 22 A (line 5x2.5, breaker C25) -> set back to 20 A.
+#    The stop is retried 3 times; if the charger still charges -> urgent push.
+# 3) Current ceiling 22 A (line 5x2.5, breaker C25) -> set back to 20 A.
 
 input_boolean:
   ev_paused_no_grid:
@@ -52,17 +52,45 @@ automation:
           {{ s is none or s.state == 'off'
              or (s.state != 'on' and (now() - s.last_changed).total_seconds() >= 300) }}
     actions:
-      - action: switch.turn_off
-        target: { entity_id: switch.electros_local_192_168_1_124_zariadka }
+      # Since the integration fork v1.6.1 a stop the charger did not get raises an error:
+      # retry, and check the switch (it is "on" only while the charger really charges).
+      - repeat:
+          sequence:
+            - action: switch.turn_off
+              target: { entity_id: switch.electros_local_192_168_1_124_zariadka }
+              continue_on_error: true
+            - if:
+                - condition: state
+                  entity_id: switch.electros_local_192_168_1_124_zariadka
+                  state: "on"
+              then:
+                - delay: { seconds: 10 }
+          until:
+            - condition: template
+              value_template: "{{ not is_state('switch.electros_local_192_168_1_124_zariadka', 'on') or repeat.index >= 3 }}"
       - action: input_boolean.turn_on
         target: { entity_id: input_boolean.ev_paused_no_grid }
+      - if:
+          - condition: state
+            entity_id: switch.electros_local_192_168_1_124_zariadka
+            state: "on"
+        then:
+          - action: notify.mobile_app_oleksiy_iphone
+            data:
+              title: "Авто: НЕ вдалося вимкнути зарядку без мережі"
+              message: >
+                Машина розряджає батарею будинку. Вимкніть зарядку вручну
+                (вебсторінка зарядки або автомат на лінії).
+              data:
+                push:
+                  interruption-level: time-sensitive
       - action: persistent_notification.create
         data:
           notification_id: ev_safety
           title: >
-            {{ 'Авто: немає мережі — зарядку вимкнено'
-               if is_state('binary_sensor.deye_inverter_grid', 'off')
-               else 'Авто: немає даних з інвертора — зарядку вимкнено' }}
+            {% if is_state('switch.electros_local_192_168_1_124_zariadka', 'on') %}Авто: НЕ вдалося вимкнути зарядку
+            {%- elif is_state('binary_sensor.deye_inverter_grid', 'off') %}Авто: немає мережі — зарядку вимкнено
+            {%- else %}Авто: немає даних з інвертора — зарядку вимкнено{% endif %}
           message: >
             Без мережі машина розряджала б батарею будинку.
             Коли мережа (і дані з інвертора) повернуться: уночі з «лише вночі» зарядка продовжиться сама,
@@ -94,10 +122,15 @@ automation:
             sequence:
               - action: switch.turn_on
                 target: { entity_id: switch.electros_local_192_168_1_124_zariadka }
+                continue_on_error: true
+              - delay: { seconds: 20 }
               - action: persistent_notification.create
                 data:
                   notification_id: ev_safety
-                  title: "Авто: мережа повернулась — нічну зарядку продовжено"
+                  title: >
+                    {{ 'Авто: мережа повернулась — нічну зарядку продовжено'
+                       if is_state('switch.electros_local_192_168_1_124_zariadka', 'on')
+                       else 'Авто: мережа повернулась, але зарядка НЕ продовжилась' }}
                   message: "Зарядку було зупинено через відсутність мережі."
         default:
           - action: persistent_notification.create
@@ -105,33 +138,6 @@ automation:
               notification_id: ev_safety
               title: "Авто: мережа повернулась"
               message: "Зарядку не продовжено автоматично. Якщо треба — «Почати зарядку» на картці."
-
-  - id: ev_safety_missed_night_start
-    alias: "Авто: ніч — почати із запізненням після перезапуску HA"
-    mode: single
-    triggers:
-      - trigger: homeassistant
-        event: start
-    actions:
-      - delay: { minutes: 2 }   # wait for Solarman and ElectroS to connect
-      - condition: state
-        entity_id: input_boolean.ev_night_mode
-        state: "on"
-      - condition: time
-        after: "23:00:00"
-        before: "23:30:00"
-      - condition: state
-        entity_id: binary_sensor.deye_inverter_grid
-        state: "on"
-      - condition: state
-        entity_id: switch.electros_local_192_168_1_124_zariadka
-        state: "off"
-      - action: switch.turn_on
-        target: { entity_id: switch.electros_local_192_168_1_124_zariadka }
-      - action: logbook.log
-        data:
-          name: "Авто: ніч"
-          message: "HA перезапускався о 23:00 — нічну зарядку почато із запізненням"
 
   - id: ev_safety_current_limit
     alias: "Авто: безпека — струм не більше 22 A"

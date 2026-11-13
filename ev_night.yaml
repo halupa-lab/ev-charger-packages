@@ -1,13 +1,20 @@
 # /config/packages/ev/ev_night.yaml
-# Night charging. When "charge only at night" is on, the car charges only 23:00-07:00 (night tariff):
-#   23:00 -> charger ON, 07:00 -> charger OFF.
-# In the day the charger must stay OFF BEFORE the car is plugged in ("charging forbidden"):
-# then the car waits quietly. Stopping a charge that has already started makes the car
-# report "Charging Override/Interrupt Occurred" (Chevrolet Bolt beeps).
-# The card button "Почати зарядку" turns on "hold battery" first, so it always means "charge now".
+# Night charging through the charger's OWN timer (needs the integration fork electros-ev-local-ha >= 1.7.0).
+#
+# "Заряджати лише вночі" on  -> timer 23:00-07:00 in the charger. Outside the window the charger does not
+#   charge at all (even after a start command), so a car plugged in during the day waits quietly
+#   (no start-then-stop, no car beeps), and at 23:00 the charger starts by itself, even if HA is down.
+#   At 07:00 the charger stops by itself.
+# "Заряджати лише вночі" off -> timer cleared: the charger charges as soon as the car is plugged in.
+#
+# Every timer command also sets the charger clock to HA time: the timer runs on that clock, which drifts
+# about 20 s a day. The timer is (re)sent when the mode changes, daily at 12:00, after an HA start, and when
+# the timer or the clock in the charger is not what it should be. No confirmation after 3 tries -> push.
+#
+# The charger starts with the current stored in it, which may be what the day left there (e.g. 6 A).
+# So when night charging starts, HA sets the night current.
+#
 # Home battery at night: the night TOU programs (1 and 6, 80 %, Grid Charge) do not let it discharge.
-# KNOWN ISSUE: switch.electros_..._zariadka is "on" only while the charger reports "charging",
-# so ev_night_keep_off acts only AFTER charging has started (see the backlog in the prompt).
 
 input_boolean:
   ev_night_mode:
@@ -15,76 +22,151 @@ input_boolean:
     icon: mdi:weather-night
 
 automation:
-  - id: ev_night_start
-    alias: "Авто: ніч — почати о 23:00"
-    triggers:
-      - trigger: time
-        at: "23:00:00"
-    conditions:
-      - condition: state
-        entity_id: input_boolean.ev_night_mode
-        state: "on"
-    actions:
-      - action: switch.turn_on
-        target: { entity_id: switch.electros_local_192_168_1_124_zariadka }
-      - action: logbook.log
-        data:
-          name: "Авто: ніч"
-          message: "23:00 — зарядку ввімкнено (нічний тариф)"
-
-  - id: ev_night_stop
-    alias: "Авто: ніч — зупинити о 07:00"
-    triggers:
-      - trigger: time
-        at: "07:00:00"
-    conditions:
-      - condition: state
-        entity_id: input_boolean.ev_night_mode
-        state: "on"
-    actions:
-      - action: switch.turn_off
-        target: { entity_id: switch.electros_local_192_168_1_124_zariadka }
-      - action: persistent_notification.create
-        data:
-          notification_id: ev_night
-          title: "Авто: нічну зарядку завершено"
-          message: "07:00 — зарядку вимкнено, нічний тариф закінчився."
-
-  # Keep the charger OFF in the day while night mode is on, so the car never starts and stops.
-  - id: ev_night_keep_off
-    alias: "Авто: ніч — тримати зарядку вимкненою вдень"
+  - id: ev_night_timer
+    alias: "Авто: ніч — таймер у зарядці"
+    description: "Ставить 23:00–07:00 у зарядці, коли «лише вночі» увімкнено, і знімає таймер, коли вимкнено. Заодно виставляє годинник зарядки."
+    mode: queued
+    max: 3
     triggers:
       - trigger: state
         entity_id: input_boolean.ev_night_mode
-        to: "on"
+        to: ["on", "off"]
+        id: mode
+      - trigger: time
+        at: "12:00:00"
+        id: daily
+      - trigger: homeassistant
+        event: start
+        id: start
+      # Someone changed the timer (charger web page) or it got lost: put it back.
+      - trigger: state
+        entity_id: sensor.electros_local_192_168_1_124_taimer_zariadki
+        for: { minutes: 1 }
+        id: check
+      - trigger: numeric_state
+        entity_id: sensor.electros_local_192_168_1_124_vidkhilennia_godinnika_zariadki
+        above: 60
+        for: { minutes: 1 }
+        id: check
+      - trigger: numeric_state
+        entity_id: sensor.electros_local_192_168_1_124_vidkhilennia_godinnika_zariadki
+        below: -60
+        for: { minutes: 1 }
+        id: check
+    variables:
+      timer_entity: sensor.electros_local_192_168_1_124_taimer_zariadki
+      clock_entity: sensor.electros_local_192_168_1_124_vidkhilennia_godinnika_zariadki
+    actions:
+      - if:
+          - condition: trigger
+            id: start
+        then:
+          - delay: { minutes: 1 }   # wait for the ElectroS integration to connect
+      # Mode change and the daily run always send (the daily run keeps the clock right);
+      # the other triggers send only when the charger is not as it should be.
+      - condition: template
+        value_template: >
+          {% set night = is_state('input_boolean.ev_night_mode', 'on') %}
+          {% set ok_timer = (is_state_attr(timer_entity, 'enabled', true)
+                             and state_attr(timer_entity, 'start') == '23:00'
+                             and state_attr(timer_entity, 'end') == '07:00')
+                            if night else is_state_attr(timer_entity, 'enabled', false) %}
+          {% set ok_clock = states(clock_entity) | float(999) | abs <= 60 %}
+          {{ trigger.id in ['mode', 'daily'] or not (ok_timer and ok_clock) }}
+      - repeat:
+          sequence:
+            - if:
+                - condition: state
+                  entity_id: input_boolean.ev_night_mode
+                  state: "on"
+              then:
+                - action: electros_ev_local.set_timer
+                  data: { start: "23:00", end: "07:00" }
+                  continue_on_error: true
+              else:
+                - action: electros_ev_local.clear_timer
+                  continue_on_error: true
+            - variables:
+                ok: >
+                  {% set night = is_state('input_boolean.ev_night_mode', 'on') %}
+                  {% set ok_timer = (is_state_attr(timer_entity, 'enabled', true)
+                                     and state_attr(timer_entity, 'start') == '23:00'
+                                     and state_attr(timer_entity, 'end') == '07:00')
+                                    if night else is_state_attr(timer_entity, 'enabled', false) %}
+                  {{ ok_timer and states(clock_entity) | float(999) | abs <= 60 }}
+            - if:
+                - condition: template
+                  value_template: "{{ not ok and repeat.index < 3 }}"
+              then:
+                - delay: { seconds: 30 }
+          until: "{{ ok or repeat.index >= 3 }}"
+      - if:
+          - condition: template
+            value_template: "{{ ok }}"
+        then:
+          - action: logbook.log
+            data:
+              name: "Авто: ніч"
+              message: >
+                {{ 'Таймер 23:00–07:00 у зарядці' if is_state('input_boolean.ev_night_mode', 'on') else 'Таймер у зарядці вимкнено' }},
+                годинник зарядки виставлено ({{ trigger.id }})
+        else:
+          - action: notify.mobile_app_oleksiy_iphone
+            data:
+              title: "Авто: таймер зарядки НЕ встановлено"
+              message: >
+                Зарядка не підтвердила {{ 'таймер 23:00–07:00' if is_state('input_boolean.ev_night_mode', 'on') else 'вимкнення таймера' }}
+                після 3 спроб. Зараз у зарядці: {{ states(timer_entity) }}. Перевірте, чи зарядка на зв'язку.
+          - action: persistent_notification.create
+            data:
+              notification_id: ev_night
+              title: "Авто: таймер зарядки НЕ встановлено"
+              message: "Зарядка не підтвердила таймер після 3 спроб. Зараз у зарядці: {{ states(timer_entity) }}."
+
+  # The charger starts at 23:00 with the current stored in it. Set the night current once charging runs:
+  # while charging, a new current goes to the charger at once and stays stored there.
+  - id: ev_night_current
+    alias: "Авто: ніч — струм 20 A на старті"
+    description: "Коли вночі почалась зарядка, ставить 20 A (зарядка стартує з того струму, що лишився з дня)."
+    mode: single
+    triggers:
       - trigger: state
         entity_id: switch.electros_local_192_168_1_124_zariadka
         to: "on"
-        for: { seconds: 2 }   # the card button turns on "hold battery" first; give it time
-      - trigger: homeassistant
-        event: start
+        for: { seconds: 10 }
     conditions:
       - condition: state
         entity_id: input_boolean.ev_night_mode
         state: "on"
       - condition: time
-        after: "07:00:00"
-        before: "23:00:00"
-      - condition: state
-        entity_id: input_boolean.ev_battery_hold
-        state: "off"
-      - condition: state
-        entity_id: switch.electros_local_192_168_1_124_zariadka
-        state: "on"
+        after: "23:00:00"
+        before: "07:00:00"
+      - condition: template
+        value_template: "{{ states('sensor.electros_local_192_168_1_124_nalashtovanii_strum') | int(0) != 20 }}"
     actions:
-      - action: switch.turn_off
-        target: { entity_id: switch.electros_local_192_168_1_124_zariadka }
-      - action: logbook.log
-        data:
-          name: "Авто: ніч"
-          message: "Денний час — зарядку вимкнено наперед, до 23:00"
+      - action: number.set_value
+        target: { entity_id: number.electros_local_192_168_1_124_strum_zariadki }
+        data: { value: 20 }
+        continue_on_error: true
+      - delay: { seconds: 15 }
+      - if:
+          - condition: template
+            value_template: "{{ states('sensor.electros_local_192_168_1_124_nalashtovanii_strum') | int(0) == 20 }}"
+        then:
+          - action: logbook.log
+            data:
+              name: "Авто: ніч"
+              message: "Нічна зарядка почалась — струм 20 A"
+        else:
+          - action: notify.mobile_app_oleksiy_iphone
+            data:
+              title: "Авто: нічний струм не встановлено"
+              message: >
+                Зарядка заряджає на {{ states('sensor.electros_local_192_168_1_124_nalashtovanii_strum') }} A замість 20 A.
+                За ніч машина може не дозарядитися. Змініть струм на картці.
 
-  # Fallback: the car is already charging in the day.
+  # Fallback: the car charges in the day without "hold battery".
+  # Night mode on -> the timer did not work: stop and tell. Night mode off -> hold the home battery.
   - id: ev_day_charge_guard
     alias: "Авто: зарядка почалась сама вдень"
     triggers:
@@ -109,11 +191,13 @@ automation:
             sequence:
               - action: switch.turn_off
                 target: { entity_id: switch.electros_local_192_168_1_124_zariadka }
-              - action: persistent_notification.create
+                continue_on_error: true
+              - action: notify.mobile_app_oleksiy_iphone
                 data:
-                  notification_id: ev_night
-                  title: "Авто: чекаємо нічного тарифу"
-                  message: "Зарядка почалась сама вдень і зупинена. Почнеться о 23:00. Якщо треба зараз — «Почати зарядку» на картці."
+                  title: "Авто: зарядка почалась вдень, хоча таймер мав заборонити"
+                  message: >
+                    Таймер у зарядці: {{ states('sensor.electros_local_192_168_1_124_taimer_zariadki') }}.
+                    Зарядку {{ 'зупинено' if not is_state('switch.electros_local_192_168_1_124_zariadka', 'on') else 'НЕ вдалося зупинити' }}.
         default:
           - action: input_boolean.turn_on
             target: { entity_id: input_boolean.ev_battery_hold }
