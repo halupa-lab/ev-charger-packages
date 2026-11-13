@@ -1,0 +1,17 @@
+extends: default
+
+rules:
+  # HA files do not start with "---".
+  document-start: disable
+  # Long Jinja templates and Ukrainian messages read better on one line.
+  line-length:
+    max: 160
+  # Flow mappings like "{ seconds: 3 }" are common in HA examples.
+  braces:
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  comments:
+    min-spaces-from-content: 1
+  # GitHub Actions uses the key "on:".
+  truthy:
+    check-keys: false

@@ -1,0 +1,177 @@
+# /config/packages/ev/ev_safety.yaml  (v2)
+# Safety for EV charging.
+#
+# Facts this file relies on (checked in the ElectroS integration code and the Deye manual):
+# - switch.electros_..._zariadka is "on" ONLY while the charger reports status "charging".
+#   turn_on sends the start command, turn_off sends the stop command ("Заборона заряджання").
+# - The integration keeps its own target current in HA and sends it to the charger only with
+#   the start command or while charging. The REAL value in the charger is the sensor
+#   "Налаштований струм".
+# - Without grid the Deye TOU limits do not work: the battery can go down to Shutdown 10 %.
+#
+# 1) No grid -> stop charging. Also when there is NO DATA from Deye for 5 minutes while the car charges
+#    (fail-safe: we cannot see the grid, so we assume the worst). Whatever starts charging while
+#    there is no grid (23:00, card button, ElectroS web UI) is stopped again.
+# 2) Grid (or data) is back for 2 minutes -> resume ONLY if charging was stopped by rule 1 and it is
+#    night with night mode on. In the day: only a notification. A manual stop is never undone.
+# 3) HA was restarting at 23:00 -> start the night charge late (only 23:00-23:30).
+# 4) Current ceiling 22 A (line 5x2.5, breaker C25) -> set back to 20 A.
+
+input_boolean:
+  ev_paused_no_grid:
+    name: "Авто: зарядку зупинено, бо немає мережі"
+    icon: mdi:transmission-tower-off
+
+automation:
+  - id: ev_safety_grid_lost
+    alias: "Авто: безпека — немає мережі, вимкнути зарядку"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.deye_inverter_grid
+        to: "off"
+        for: { seconds: 5 }
+        id: no_grid
+      - trigger: state
+        entity_id: binary_sensor.deye_inverter_grid
+        to: ["unavailable", "unknown"]
+        for: { minutes: 5 }
+        id: no_data
+      - trigger: state
+        entity_id: switch.electros_local_192_168_1_124_zariadka
+        to: "on"
+        id: charging_started
+    conditions:
+      - condition: state
+        entity_id: switch.electros_local_192_168_1_124_zariadka
+        state: "on"
+      # grid is off, or there is no data from Deye for 5 minutes or more
+      - condition: template
+        value_template: >
+          {% set s = states.binary_sensor.deye_inverter_grid %}
+          {{ s is none or s.state == 'off'
+             or (s.state != 'on' and (now() - s.last_changed).total_seconds() >= 300) }}
+    actions:
+      - action: switch.turn_off
+        target: { entity_id: switch.electros_local_192_168_1_124_zariadka }
+      - action: input_boolean.turn_on
+        target: { entity_id: input_boolean.ev_paused_no_grid }
+      - action: persistent_notification.create
+        data:
+          notification_id: ev_safety
+          title: >
+            {{ 'Авто: немає мережі — зарядку вимкнено'
+               if is_state('binary_sensor.deye_inverter_grid', 'off')
+               else 'Авто: немає даних з інвертора — зарядку вимкнено' }}
+          message: >
+            Без мережі машина розряджала б батарею будинку.
+            Коли мережа (і дані з інвертора) повернуться: уночі з «лише вночі» зарядка продовжиться сама,
+            вдень — натисніть «Почати зарядку» на картці.
+
+  - id: ev_safety_grid_back
+    alias: "Авто: безпека — мережа повернулась"
+    mode: single
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.deye_inverter_grid
+        to: "on"
+        for: { minutes: 2 }
+    conditions:
+      - condition: state
+        entity_id: input_boolean.ev_paused_no_grid
+        state: "on"
+    actions:
+      - action: input_boolean.turn_off
+        target: { entity_id: input_boolean.ev_paused_no_grid }
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.ev_night_mode
+                state: "on"
+              - condition: time
+                after: "23:00:00"
+                before: "07:00:00"
+            sequence:
+              - action: switch.turn_on
+                target: { entity_id: switch.electros_local_192_168_1_124_zariadka }
+              - action: persistent_notification.create
+                data:
+                  notification_id: ev_safety
+                  title: "Авто: мережа повернулась — нічну зарядку продовжено"
+                  message: "Зарядку було зупинено через відсутність мережі."
+        default:
+          - action: persistent_notification.create
+            data:
+              notification_id: ev_safety
+              title: "Авто: мережа повернулась"
+              message: "Зарядку не продовжено автоматично. Якщо треба — «Почати зарядку» на картці."
+
+  - id: ev_safety_missed_night_start
+    alias: "Авто: ніч — почати із запізненням після перезапуску HA"
+    mode: single
+    triggers:
+      - trigger: homeassistant
+        event: start
+    actions:
+      - delay: { minutes: 2 }   # wait for Solarman and ElectroS to connect
+      - condition: state
+        entity_id: input_boolean.ev_night_mode
+        state: "on"
+      - condition: time
+        after: "23:00:00"
+        before: "23:30:00"
+      - condition: state
+        entity_id: binary_sensor.deye_inverter_grid
+        state: "on"
+      - condition: state
+        entity_id: switch.electros_local_192_168_1_124_zariadka
+        state: "off"
+      - action: switch.turn_on
+        target: { entity_id: switch.electros_local_192_168_1_124_zariadka }
+      - action: logbook.log
+        data:
+          name: "Авто: ніч"
+          message: "HA перезапускався о 23:00 — нічну зарядку почато із запізненням"
+
+  - id: ev_safety_current_limit
+    alias: "Авто: безпека — струм не більше 22 A"
+    mode: single
+    triggers:
+      - trigger: numeric_state
+        entity_id: number.electros_local_192_168_1_124_strum_zariadki
+        above: 22
+      - trigger: numeric_state
+        entity_id: sensor.electros_local_192_168_1_124_nalashtovanii_strum
+        above: 22
+      - trigger: numeric_state
+        entity_id: sensor.ev_charger_power
+        above: 300
+        for: { seconds: 5 }
+      # re-check every minute while charging (in case a command to the charger was lost)
+      - trigger: time_pattern
+        minutes: "/1"
+    conditions:
+      - condition: or
+        conditions:
+          # the HA value is too high: fix it at any time
+          - condition: numeric_state
+            entity_id: number.electros_local_192_168_1_124_strum_zariadki
+            above: 22
+          # the value in the charger is too high: HA can change it only while charging
+          - condition: and
+            conditions:
+              - condition: numeric_state
+                entity_id: sensor.electros_local_192_168_1_124_nalashtovanii_strum
+                above: 22
+              - condition: numeric_state
+                entity_id: sensor.ev_charger_power
+                above: 300
+    actions:
+      - action: number.set_value
+        target: { entity_id: number.electros_local_192_168_1_124_strum_zariadki }
+        data: { value: 20 }
+      - action: persistent_notification.create
+        data:
+          notification_id: ev_safety_current
+          title: "Авто: струм понад 22 A — повернуто 20 A"
+          message: "Лінія зарядки (5×2.5, автомат C25) розрахована до 22 A."

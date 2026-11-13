@@ -1,0 +1,201 @@
+# /config/packages/ev/ev_battery_hold.yaml
+# Hold the home battery while the car charges from the grid.
+# ON:  save SOC of Deye TOU programs 1-6, then raise every program SOC that is below
+#      the current battery SOC up to the current SOC -> the inverter stops discharging the battery.
+# OFF: write the saved values back (all 6, every time).
+# Fail-safe: if HA stops in the middle, the battery keeps MORE reserve, not less.
+# Auto OFF: no charging for 15 min, charger switch off for 2 min, or the timer limit.
+
+input_boolean:
+  ev_battery_hold:
+    name: "Авто: тримати батарею будинку"
+    icon: mdi:battery-lock
+
+input_text:
+  ev_battery_hold_backup:
+    name: "Авто: збережені SOC програм TOU"
+    max: 100
+
+timer:
+  ev_battery_hold_limit:
+    name: "Авто: ліміт утримання батареї"
+    duration: "14:00:00"
+    restore: true
+
+script:
+  ev_battery_hold_apply:
+    alias: "Авто: підняти SOC програм TOU"
+    mode: single
+    variables:
+      # Same list in ev_battery_hold_release.
+      programs:
+        - number.deye_inverter_program_1_soc
+        - number.deye_inverter_program_2_soc
+        - number.deye_inverter_program_3_soc
+        - number.deye_inverter_program_4_soc
+        - number.deye_inverter_program_5_soc
+        - number.deye_inverter_program_6_soc
+      hold_soc: "{{ states('sensor.deye_inverter_battery') | int(-1) }}"
+      all_ok: >
+        {% set ns = namespace(ok = hold_soc > 0) %}
+        {% for e in programs %}{% if not is_number(states(e)) %}{% set ns.ok = false %}{% endif %}{% endfor %}
+        {{ ns.ok }}
+    sequence:
+      - if:
+          - condition: template
+            value_template: "{{ not all_ok }}"
+        then:
+          - action: persistent_notification.create
+            data:
+              notification_id: ev_battery_hold
+              title: "Авто: батарею НЕ зафіксовано"
+              message: "Немає даних SOC батареї або програм TOU (Program N SOC вимкнені чи недоступні). Нічого не змінено."
+          - action: input_boolean.turn_off
+            target: { entity_id: input_boolean.ev_battery_hold }
+          - stop: "No data"
+
+      # Save the original values only once (do not overwrite them with already raised values).
+      - if:
+          - condition: template
+            value_template: "{{ states('input_text.ev_battery_hold_backup').split(',') | count != 6 }}"
+        then:
+          - action: input_text.set_value
+            target: { entity_id: input_text.ev_battery_hold_backup }
+            data:
+              value: >
+                {% set ns = namespace(v=[]) %}
+                {% for e in programs %}{% set ns.v = ns.v + [states(e) | int] %}{% endfor %}
+                {{ ns.v | join(',') }}
+
+      - variables:
+          to_raise: >
+            {% set ns = namespace(v=[]) %}
+            {% for e in programs %}{% if states(e) | int(100) < hold_soc %}{% set ns.v = ns.v + [e] %}{% endif %}{% endfor %}
+            {{ ns.v }}
+      - repeat:
+          for_each: "{{ to_raise }}"
+          sequence:
+            - action: number.set_value
+              target: { entity_id: "{{ repeat.item }}" }
+              data: { value: "{{ hold_soc }}" }
+            - delay: { seconds: 3 }   # give the Wi-Fi logger time between writes
+
+      - action: persistent_notification.create
+        data:
+          notification_id: ev_battery_hold
+          title: "Авто: батарею зафіксовано на {{ hold_soc }} %"
+          message: "Збережено: {{ states('input_text.ev_battery_hold_backup') }}. Піднято програм: {{ to_raise | count }}."
+
+  ev_battery_hold_release:
+    alias: "Авто: повернути SOC програм TOU"
+    mode: single
+    variables:
+      programs:
+        - number.deye_inverter_program_1_soc
+        - number.deye_inverter_program_2_soc
+        - number.deye_inverter_program_3_soc
+        - number.deye_inverter_program_4_soc
+        - number.deye_inverter_program_5_soc
+        - number.deye_inverter_program_6_soc
+      saved: "{{ states('input_text.ev_battery_hold_backup').split(',') }}"
+    sequence:
+      - condition: template
+        value_template: "{{ saved | count == 6 }}"
+      # Write all 6 every time: the read-back of these values can lag by minutes.
+      - repeat:
+          for_each: "{{ range(6) | list }}"
+          sequence:
+            - action: number.set_value
+              target: { entity_id: "{{ programs[repeat.item] }}" }
+              data: { value: "{{ saved[repeat.item] | int }}" }
+            - delay: { seconds: 3 }
+      - action: input_text.set_value
+        target: { entity_id: input_text.ev_battery_hold_backup }
+        data: { value: "" }
+      - action: persistent_notification.create
+        data:
+          notification_id: ev_battery_hold
+          title: "Авто: межі SOC повернуто"
+          message: "Записано: {{ saved | join(', ') }} %."
+
+automation:
+  - id: ev_battery_hold_on
+    alias: "Авто: тримати батарею — увімкнено"
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.ev_battery_hold
+        to: "on"
+    actions:
+      - action: timer.start
+        target: { entity_id: timer.ev_battery_hold_limit }
+      - action: script.ev_battery_hold_apply
+
+  - id: ev_battery_hold_off
+    alias: "Авто: тримати батарею — вимкнено"
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.ev_battery_hold
+        from: "on"
+        to: "off"
+    actions:
+      - action: timer.cancel
+        target: { entity_id: timer.ev_battery_hold_limit }
+      - action: script.ev_battery_hold_release
+
+  - id: ev_battery_hold_auto_off
+    alias: "Авто: тримати батарею — автовимкнення"
+    triggers:
+      - trigger: numeric_state
+        entity_id: sensor.ev_charger_power
+        below: 100
+        for: { minutes: 15 }
+        id: "зарядка не йде 15 хв"
+      - trigger: state
+        entity_id: switch.electros_local_192_168_1_124_zariadka
+        to: "off"
+        for: { minutes: 2 }
+        id: "зарядку вимкнено"
+      - trigger: event
+        event_type: timer.finished
+        event_data: { entity_id: timer.ev_battery_hold_limit }
+        id: "ліміт часу"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.ev_battery_hold
+        state: "on"
+    actions:
+      - action: logbook.log
+        data:
+          name: "Авто: тримати батарею"
+          message: "Автовимкнення — {{ trigger.id }}"
+      - action: input_boolean.turn_off
+        target: { entity_id: input_boolean.ev_battery_hold }
+
+  # Charging through the night: before the day TOU slot starts, raise the hold level to the current SOC.
+  - id: ev_battery_hold_morning
+    alias: "Авто: тримати батарею — оновити рівень зранку"
+    triggers:
+      - trigger: time
+        at: "06:55:00"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.ev_battery_hold
+        state: "on"
+    actions:
+      - action: script.ev_battery_hold_apply
+
+  # After an HA restart: the switch is off, but saved values are still there -> restore them.
+  - id: ev_battery_hold_recover
+    alias: "Авто: тримати батарею — відновлення після перезапуску"
+    triggers:
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: state
+        entity_id: input_boolean.ev_battery_hold
+        state: "off"
+      - condition: template
+        value_template: "{{ states('input_text.ev_battery_hold_backup').split(',') | count == 6 }}"
+    actions:
+      - delay: { minutes: 2 }   # wait for Solarman to connect
+      - action: script.ev_battery_hold_release

@@ -1,0 +1,194 @@
+# /config/packages/ev/ev_accounting.yaml
+# EV charging accounting: kWh by source (solar / home battery / grid night / grid day) and grid cost in UAH.
+# Allocation is "marginal": the car is treated as the last load in the house,
+# so grid import (up to the charger power) is charged to the car first, then battery discharge, rest = solar.
+# If there is no fresh data from the Deye logger (it drops out for about a minute, many times a night),
+# the car power is counted as GRID power for that time (night or day tariff by the clock).
+# At night this is exactly right; in the day it can only count a bit more, never less.
+
+template:
+  - sensor:
+      # Charger power. The integration reports "unknown" when idle -> treat as 0 W.
+      - name: "EV charger power"
+        unique_id: ev_charger_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {{ [states('sensor.electros_local_192_168_1_124_potuzhnist_zariadki') | float(0), 0] | max | round(0) }}
+
+      # Part of charger power that comes from the grid. Deye: grid power plus = import.
+      - name: "EV charger grid power"
+        unique_id: ev_charger_grid_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set ev = states('sensor.ev_charger_power') | float(0) %}
+          {% if has_value('sensor.deye_inverter_grid_power') and has_value('sensor.deye_inverter_battery_power') %}
+            {% set grid_in = [states('sensor.deye_inverter_grid_power') | float(0), 0] | max %}
+            {{ [ev, grid_in] | min | round(0) }}
+          {% else %}
+            {{ ev | round(0) }}
+          {% endif %}
+
+      # Part from the home battery. Deye: battery power plus = discharge, minus = charge.
+      - name: "EV charger battery power"
+        unique_id: ev_charger_battery_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {% if has_value('sensor.deye_inverter_grid_power') and has_value('sensor.deye_inverter_battery_power') %}
+            {% set ev = states('sensor.ev_charger_power') | float(0) %}
+            {% set grid_in = [states('sensor.deye_inverter_grid_power') | float(0), 0] | max %}
+            {% set bat_out = [states('sensor.deye_inverter_battery_power') | float(0), 0] | max %}
+            {{ [[ev - grid_in, 0] | max, bat_out] | min | round(0) }}
+          {% else %}
+            0
+          {% endif %}
+
+      # The rest is solar.
+      - name: "EV charger solar power"
+        unique_id: ev_charger_solar_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {% if has_value('sensor.deye_inverter_grid_power') and has_value('sensor.deye_inverter_battery_power') %}
+            {% set ev = states('sensor.ev_charger_power') | float(0) %}
+            {% set grid_in = [states('sensor.deye_inverter_grid_power') | float(0), 0] | max %}
+            {% set bat_out = [states('sensor.deye_inverter_battery_power') | float(0), 0] | max %}
+            {{ [ev - grid_in - bat_out, 0] | max | round(0) }}
+          {% else %}
+            0
+          {% endif %}
+
+      # Grid part split by tariff zone (night 23:00-07:00).
+      - name: "EV charger grid night power"
+        unique_id: ev_charger_grid_night_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set night = now().hour >= 23 or now().hour < 7 %}
+          {{ states('sensor.ev_charger_grid_power') | float(0) if night else 0 }}
+
+      - name: "EV charger grid day power"
+        unique_id: ev_charger_grid_day_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set night = now().hour >= 23 or now().hour < 7 %}
+          {{ 0 if night else states('sensor.ev_charger_grid_power') | float(0) }}
+
+      # Money rate: grid kW x current tariff = UAH per hour. Integrated below into UAH.
+      - name: "EV charger grid cost rate"
+        unique_id: ev_charger_grid_cost_rate
+        unit_of_measurement: "UAH/h"
+        state_class: measurement
+        state: >
+          {{ (states('sensor.ev_charger_grid_power') | float(0) / 1000
+              * states('sensor.grid_electricity_price') | float(0)) | round(3) }}
+
+# Power (W) -> energy (kWh) and UAH/h -> UAH. "left" suits step-like charging power.
+# max_sub_interval keeps counting even when the power value does not change.
+sensor:
+  - platform: integration
+    source: sensor.ev_charger_power
+    name: "EV charger energy"
+    unique_id: ev_charger_energy
+    unit_prefix: k
+    unit_time: h
+    method: left
+    round: 3
+    max_sub_interval: { minutes: 1 }
+
+  - platform: integration
+    source: sensor.ev_charger_solar_power
+    name: "EV charger solar energy"
+    unique_id: ev_charger_solar_energy
+    unit_prefix: k
+    unit_time: h
+    method: left
+    round: 3
+    max_sub_interval: { minutes: 1 }
+
+  - platform: integration
+    source: sensor.ev_charger_battery_power
+    name: "EV charger battery energy"
+    unique_id: ev_charger_battery_energy
+    unit_prefix: k
+    unit_time: h
+    method: left
+    round: 3
+    max_sub_interval: { minutes: 1 }
+
+  - platform: integration
+    source: sensor.ev_charger_grid_night_power
+    name: "EV charger grid night energy"
+    unique_id: ev_charger_grid_night_energy
+    unit_prefix: k
+    unit_time: h
+    method: left
+    round: 3
+    max_sub_interval: { minutes: 1 }
+
+  - platform: integration
+    source: sensor.ev_charger_grid_day_power
+    name: "EV charger grid day energy"
+    unique_id: ev_charger_grid_day_energy
+    unit_prefix: k
+    unit_time: h
+    method: left
+    round: 3
+    max_sub_interval: { minutes: 1 }
+
+  - platform: integration
+    source: sensor.ev_charger_grid_cost_rate
+    name: "EV charger grid cost"
+    unique_id: ev_charger_grid_cost
+    unit_time: h
+    method: left
+    round: 2
+    max_sub_interval: { minutes: 1 }
+
+# Daily and monthly counters (kept for history and the Energy dashboard).
+utility_meter:
+  ev_charger_energy_today:
+    source: sensor.ev_charger_energy
+    cycle: daily
+  ev_charger_energy_month:
+    source: sensor.ev_charger_energy
+    cycle: monthly
+  ev_charger_solar_energy_today:
+    source: sensor.ev_charger_solar_energy
+    cycle: daily
+  ev_charger_solar_energy_month:
+    source: sensor.ev_charger_solar_energy
+    cycle: monthly
+  ev_charger_battery_energy_today:
+    source: sensor.ev_charger_battery_energy
+    cycle: daily
+  ev_charger_battery_energy_month:
+    source: sensor.ev_charger_battery_energy
+    cycle: monthly
+  ev_charger_grid_night_energy_today:
+    source: sensor.ev_charger_grid_night_energy
+    cycle: daily
+  ev_charger_grid_night_energy_month:
+    source: sensor.ev_charger_grid_night_energy
+    cycle: monthly
+  ev_charger_grid_day_energy_today:
+    source: sensor.ev_charger_grid_day_energy
+    cycle: daily
+  ev_charger_grid_day_energy_month:
+    source: sensor.ev_charger_grid_day_energy
+    cycle: monthly
+  ev_charger_grid_cost_today:
+    source: sensor.ev_charger_grid_cost
+    cycle: daily
+  ev_charger_grid_cost_month:
+    source: sensor.ev_charger_grid_cost
+    cycle: monthly

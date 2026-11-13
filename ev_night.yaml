@@ -1,0 +1,123 @@
+# /config/packages/ev/ev_night.yaml
+# Night charging. When "charge only at night" is on, the car charges only 23:00-07:00 (night tariff):
+#   23:00 -> charger ON, 07:00 -> charger OFF.
+# In the day the charger must stay OFF BEFORE the car is plugged in ("charging forbidden"):
+# then the car waits quietly. Stopping a charge that has already started makes the car
+# report "Charging Override/Interrupt Occurred" (Chevrolet Bolt beeps).
+# The card button "Почати зарядку" turns on "hold battery" first, so it always means "charge now".
+# Home battery at night: the night TOU programs (1 and 6, 80 %, Grid Charge) do not let it discharge.
+# KNOWN ISSUE: switch.electros_..._zariadka is "on" only while the charger reports "charging",
+# so ev_night_keep_off acts only AFTER charging has started (see the backlog in the prompt).
+
+input_boolean:
+  ev_night_mode:
+    name: "Авто: заряджати лише вночі"
+    icon: mdi:weather-night
+
+automation:
+  - id: ev_night_start
+    alias: "Авто: ніч — почати о 23:00"
+    triggers:
+      - trigger: time
+        at: "23:00:00"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.ev_night_mode
+        state: "on"
+    actions:
+      - action: switch.turn_on
+        target: { entity_id: switch.electros_local_192_168_1_124_zariadka }
+      - action: logbook.log
+        data:
+          name: "Авто: ніч"
+          message: "23:00 — зарядку ввімкнено (нічний тариф)"
+
+  - id: ev_night_stop
+    alias: "Авто: ніч — зупинити о 07:00"
+    triggers:
+      - trigger: time
+        at: "07:00:00"
+    conditions:
+      - condition: state
+        entity_id: input_boolean.ev_night_mode
+        state: "on"
+    actions:
+      - action: switch.turn_off
+        target: { entity_id: switch.electros_local_192_168_1_124_zariadka }
+      - action: persistent_notification.create
+        data:
+          notification_id: ev_night
+          title: "Авто: нічну зарядку завершено"
+          message: "07:00 — зарядку вимкнено, нічний тариф закінчився."
+
+  # Keep the charger OFF in the day while night mode is on, so the car never starts and stops.
+  - id: ev_night_keep_off
+    alias: "Авто: ніч — тримати зарядку вимкненою вдень"
+    triggers:
+      - trigger: state
+        entity_id: input_boolean.ev_night_mode
+        to: "on"
+      - trigger: state
+        entity_id: switch.electros_local_192_168_1_124_zariadka
+        to: "on"
+        for: { seconds: 2 }   # the card button turns on "hold battery" first; give it time
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: state
+        entity_id: input_boolean.ev_night_mode
+        state: "on"
+      - condition: time
+        after: "07:00:00"
+        before: "23:00:00"
+      - condition: state
+        entity_id: input_boolean.ev_battery_hold
+        state: "off"
+      - condition: state
+        entity_id: switch.electros_local_192_168_1_124_zariadka
+        state: "on"
+    actions:
+      - action: switch.turn_off
+        target: { entity_id: switch.electros_local_192_168_1_124_zariadka }
+      - action: logbook.log
+        data:
+          name: "Авто: ніч"
+          message: "Денний час — зарядку вимкнено наперед, до 23:00"
+
+  # Fallback: the car is already charging in the day.
+  - id: ev_day_charge_guard
+    alias: "Авто: зарядка почалась сама вдень"
+    triggers:
+      - trigger: numeric_state
+        entity_id: sensor.ev_charger_power
+        above: 300
+        for: { seconds: 10 }
+    conditions:
+      - condition: time
+        after: "07:00:00"
+        before: "23:00:00"
+      # "hold battery" on = the card button was used, so the user wants to charge now
+      - condition: state
+        entity_id: input_boolean.ev_battery_hold
+        state: "off"
+    actions:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.ev_night_mode
+                state: "on"
+            sequence:
+              - action: switch.turn_off
+                target: { entity_id: switch.electros_local_192_168_1_124_zariadka }
+              - action: persistent_notification.create
+                data:
+                  notification_id: ev_night
+                  title: "Авто: чекаємо нічного тарифу"
+                  message: "Зарядка почалась сама вдень і зупинена. Почнеться о 23:00. Якщо треба зараз — «Почати зарядку» на картці."
+        default:
+          - action: input_boolean.turn_on
+            target: { entity_id: input_boolean.ev_battery_hold }
+          - action: logbook.log
+            data:
+              name: "Авто: тримати батарею"
+              message: "Зарядка почалась сама вдень — утримання ввімкнено автоматично"
