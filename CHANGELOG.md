@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.1
+
+- The charging current is the one set on the card. `ev_night_current` (always 20 A at night) is replaced by `ev_current_apply`: when charging starts and the charger has a different current stored, HA sends the card current. HA no longer picks a current itself (the 22 A safety ceiling stays).
+
 ## v0.4.0
 
 - New package `ev_charge_now.yaml`: script `script.ev_charge_now` ("Авто: зарядити зараз", the card button) for a one-off charge while "charge only at night" keeps the charger timer on. In the day it holds the home battery, turns night mode off (the timer is cleared), waits for the charger to start by itself and sends start only if it does not. If nothing starts: night mode back on at once and a push.

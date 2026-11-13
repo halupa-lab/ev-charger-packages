@@ -11,8 +11,8 @@
 # about 20 s a day. The timer is (re)sent when the mode changes, daily at 12:00, after an HA start, and when
 # the timer or the clock in the charger is not what it should be. No confirmation after 3 tries -> push.
 #
-# The charger starts with the current stored in it, which may be what the day left there (e.g. 6 A).
-# So when night charging starts, HA sets the night current.
+# The charger starts with the current stored in it; ev_current_apply (below) then sends the current set on
+# the card, if it differs.
 #
 # Home battery at night: the night TOU programs (1 and 6, 80 %, Grid Charge) do not let it discharge.
 
@@ -123,11 +123,13 @@ automation:
               title: "Авто: таймер зарядки НЕ встановлено"
               message: "Зарядка не підтвердила таймер після 3 спроб. Зараз у зарядці: {{ states(timer_entity) }}."
 
-  # The charger starts at 23:00 with the current stored in it. Set the night current once charging runs:
-  # while charging, a new current goes to the charger at once and stays stored there.
-  - id: ev_night_current
-    alias: "Авто: ніч — струм 20 A на старті"
-    description: "Коли вночі почалась зарядка, ставить 20 A (зарядка стартує з того струму, що лишився з дня)."
+  # The card current is the charging current. The charger keeps its own stored current and starts with it
+  # (at 23:00 by the timer, or when the car is plugged in); a new current reaches the charger only while it
+  # charges. So once charging runs, HA sends the current set on the card if the charger has a different one.
+  # HA never picks a current itself (the 22 A safety ceiling in ev_safety.yaml is the only exception).
+  - id: ev_current_apply
+    alias: "Авто: струм з картки на старті зарядки"
+    description: "Коли зарядка почалась, а в самій зарядці інший струм, ніж на картці, — надсилає струм з картки."
     mode: single
     triggers:
       - trigger: state
@@ -135,35 +137,33 @@ automation:
         to: "on"
         for: { seconds: 10 }
     conditions:
-      - condition: state
-        entity_id: input_boolean.ev_night_mode
-        state: "on"
-      - condition: time
-        after: "23:00:00"
-        before: "07:00:00"
       - condition: template
-        value_template: "{{ states('sensor.electros_set_current') | int(0) != 20 }}"
+        value_template: >
+          {{ has_value('number.electros_charging_current') and has_value('sensor.electros_set_current')
+             and states('number.electros_charging_current') | int != states('sensor.electros_set_current') | int }}
     actions:
+      - variables:
+          wanted: "{{ states('number.electros_charging_current') | int }}"
       - action: number.set_value
         target: { entity_id: number.electros_charging_current }
-        data: { value: 20 }
+        data: { value: "{{ wanted }}" }
         continue_on_error: true
       - delay: { seconds: 15 }
       - if:
           - condition: template
-            value_template: "{{ states('sensor.electros_set_current') | int(0) == 20 }}"
+            value_template: "{{ states('sensor.electros_set_current') | int(0) == wanted }}"
         then:
           - action: logbook.log
             data:
-              name: "Авто: ніч"
-              message: "Нічна зарядка почалась — струм 20 A"
+              name: "Авто: струм"
+              message: "Зарядка почалась — струм з картки {{ wanted }} A"
         else:
           - action: notify.mobile_app_oleksiy_iphone
             data:
-              title: "Авто: нічний струм не встановлено"
+              title: "Авто: струм з картки не застосовано"
               message: >
-                Зарядка заряджає на {{ states('sensor.electros_set_current') }} A замість 20 A.
-                За ніч машина може не дозарядитися. Змініть струм на картці.
+                На картці {{ wanted }} A, а зарядка заряджає на {{ states('sensor.electros_set_current') }} A.
+                Змініть струм на картці ще раз.
 
   # Fallback: the car charges in the day without "hold battery".
   # Night mode on -> the timer did not work: stop and tell. Night mode off -> hold the home battery.
