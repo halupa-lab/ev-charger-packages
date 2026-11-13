@@ -175,9 +175,11 @@ automation:
         above: 300
         for: { seconds: 10 }
     conditions:
+      # 5 min margin: the charger timer runs on the charger clock (it runs a little fast), so its 23:00
+      # start can come a few seconds before 23:00 by HA time and must not look like a daytime start.
       - condition: time
-        after: "07:00:00"
-        before: "23:00:00"
+        after: "07:05:00"
+        before: "22:55:00"
       # "hold battery" on = the card button was used, so the user wants to charge now
       - condition: state
         entity_id: input_boolean.ev_battery_hold

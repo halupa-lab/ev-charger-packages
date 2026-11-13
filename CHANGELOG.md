@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.2
+
+- `ev_day_charge_guard` acts only 07:05–22:55. The charger clock runs a little fast, so the timer start at the charger's 23:00 could come a few seconds before 23:00 by HA time and be stopped as a daytime start.
+
 ## v0.4.1
 
 - The charging current is the one set on the card. `ev_night_current` (always 20 A at night) is replaced by `ev_current_apply`: when charging starts and the charger has a different current stored, HA sends the card current. HA no longer picks a current itself (the 22 A safety ceiling stays).
