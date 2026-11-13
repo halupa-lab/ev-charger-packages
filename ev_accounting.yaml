@@ -15,7 +15,7 @@ template:
         device_class: power
         state_class: measurement
         state: >
-          {{ [states('sensor.electros_local_192_168_1_124_potuzhnist_zariadki') | float(0), 0] | max | round(0) }}
+          {{ [states('sensor.electros_power') | float(0), 0] | max | round(0) }}
 
       # Part of charger power that comes from the grid. Deye: grid power plus = import.
       - name: "EV charger grid power"

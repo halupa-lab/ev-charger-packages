@@ -151,7 +151,7 @@ automation:
         for: { minutes: 15 }
         id: "зарядка не йде 15 хв"
       - trigger: state
-        entity_id: switch.electros_local_192_168_1_124_zariadka
+        entity_id: switch.electros_charging
         to: "off"
         for: { minutes: 2 }
         id: "зарядку вимкнено"

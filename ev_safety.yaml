@@ -2,7 +2,7 @@
 # Safety for EV charging.
 #
 # Facts this file relies on (checked in the ElectroS integration code and the Deye manual):
-# - switch.electros_..._zariadka is "on" ONLY while the charger reports status "charging".
+# - switch.electros_charging is "on" ONLY while the charger reports status "charging".
 #   turn_on sends the start command, turn_off sends the stop command ("Заборона заряджання").
 # - The integration keeps its own target current in HA and sends it to the charger only with
 #   the start command or while charging. The REAL value in the charger is the sensor
@@ -38,12 +38,12 @@ automation:
         for: { minutes: 5 }
         id: no_data
       - trigger: state
-        entity_id: switch.electros_local_192_168_1_124_zariadka
+        entity_id: switch.electros_charging
         to: "on"
         id: charging_started
     conditions:
       - condition: state
-        entity_id: switch.electros_local_192_168_1_124_zariadka
+        entity_id: switch.electros_charging
         state: "on"
       # grid is off, or there is no data from Deye for 5 minutes or more
       - condition: template
@@ -57,22 +57,22 @@ automation:
       - repeat:
           sequence:
             - action: switch.turn_off
-              target: { entity_id: switch.electros_local_192_168_1_124_zariadka }
+              target: { entity_id: switch.electros_charging }
               continue_on_error: true
             - if:
                 - condition: state
-                  entity_id: switch.electros_local_192_168_1_124_zariadka
+                  entity_id: switch.electros_charging
                   state: "on"
               then:
                 - delay: { seconds: 10 }
           until:
             - condition: template
-              value_template: "{{ not is_state('switch.electros_local_192_168_1_124_zariadka', 'on') or repeat.index >= 3 }}"
+              value_template: "{{ not is_state('switch.electros_charging', 'on') or repeat.index >= 3 }}"
       - action: input_boolean.turn_on
         target: { entity_id: input_boolean.ev_paused_no_grid }
       - if:
           - condition: state
-            entity_id: switch.electros_local_192_168_1_124_zariadka
+            entity_id: switch.electros_charging
             state: "on"
         then:
           - action: notify.mobile_app_oleksiy_iphone
@@ -88,7 +88,7 @@ automation:
         data:
           notification_id: ev_safety
           title: >
-            {% if is_state('switch.electros_local_192_168_1_124_zariadka', 'on') %}Авто: НЕ вдалося вимкнути зарядку
+            {% if is_state('switch.electros_charging', 'on') %}Авто: НЕ вдалося вимкнути зарядку
             {%- elif is_state('binary_sensor.deye_inverter_grid', 'off') %}Авто: немає мережі — зарядку вимкнено
             {%- else %}Авто: немає даних з інвертора — зарядку вимкнено{% endif %}
           message: >
@@ -121,7 +121,7 @@ automation:
                 before: "07:00:00"
             sequence:
               - action: switch.turn_on
-                target: { entity_id: switch.electros_local_192_168_1_124_zariadka }
+                target: { entity_id: switch.electros_charging }
                 continue_on_error: true
               - delay: { seconds: 20 }
               - action: persistent_notification.create
@@ -129,7 +129,7 @@ automation:
                   notification_id: ev_safety
                   title: >
                     {{ 'Авто: мережа повернулась — нічну зарядку продовжено'
-                       if is_state('switch.electros_local_192_168_1_124_zariadka', 'on')
+                       if is_state('switch.electros_charging', 'on')
                        else 'Авто: мережа повернулась, але зарядка НЕ продовжилась' }}
                   message: "Зарядку було зупинено через відсутність мережі."
         default:
@@ -144,10 +144,10 @@ automation:
     mode: single
     triggers:
       - trigger: numeric_state
-        entity_id: number.electros_local_192_168_1_124_strum_zariadki
+        entity_id: number.electros_charging_current
         above: 22
       - trigger: numeric_state
-        entity_id: sensor.electros_local_192_168_1_124_nalashtovanii_strum
+        entity_id: sensor.electros_set_current
         above: 22
       - trigger: numeric_state
         entity_id: sensor.ev_charger_power
@@ -161,20 +161,20 @@ automation:
         conditions:
           # the HA value is too high: fix it at any time
           - condition: numeric_state
-            entity_id: number.electros_local_192_168_1_124_strum_zariadki
+            entity_id: number.electros_charging_current
             above: 22
           # the value in the charger is too high: HA can change it only while charging
           - condition: and
             conditions:
               - condition: numeric_state
-                entity_id: sensor.electros_local_192_168_1_124_nalashtovanii_strum
+                entity_id: sensor.electros_set_current
                 above: 22
               - condition: numeric_state
                 entity_id: sensor.ev_charger_power
                 above: 300
     actions:
       - action: number.set_value
-        target: { entity_id: number.electros_local_192_168_1_124_strum_zariadki }
+        target: { entity_id: number.electros_charging_current }
         data: { value: 20 }
       - action: persistent_notification.create
         data:

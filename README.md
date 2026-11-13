@@ -25,7 +25,7 @@ The dashboard card lives in a separate repository: [ev-charger-card](https://git
   ```
 
   `!include_dir_named` also reads sub-folders, so this repository can live in `/config/packages/ev/`. It skips files and folders whose names start with a dot (`.github`, `.yamllint`).
-- Integrations: the fork [electros-ev-local-ha](https://github.com/halupa-lab/electros-ev-local-ha) v1.7.0+ of ElectroS EV Charger (Local) (charger timer actions) and [Solarman](https://github.com/davidrapan/ha-solarman) (`deye_p3` profile), with `number.deye_inverter_program_1_soc` … `_6_soc` enabled.
+- Integrations: the fork [electros-ev-local-ha](https://github.com/halupa-lab/electros-ev-local-ha) v1.8.0+ of ElectroS EV Charger (Local) (charger timer actions, fixed entity IDs `switch.electros_charging`, `sensor.electros_timer`, …) and [Solarman](https://github.com/davidrapan/ha-solarman) (`deye_p3` profile), with `number.deye_inverter_program_1_soc` … `_6_soc` enabled.
 - A template sensor `sensor.grid_electricity_price` (current price, UAH/kWh).
 - The Home Assistant app on a phone for pushes (`notify.mobile_app_oleksiy_iphone`).
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.0
+
+Needs the ElectroS integration fork v1.8.0 and the charger entities renamed to its English IDs (in HA: entity settings → ↻ "regenerate entity ID").
+
+- All charger entity IDs changed to the fork's fixed English IDs: `switch.electros_charging`, `number.electros_charging_current`, `sensor.electros_set_current`, `sensor.electros_power`, `sensor.electros_timer`, `sensor.electros_clock_offset`. No change in behaviour.
+
 ## v0.2.0
 
 Needs the ElectroS integration fork [electros-ev-local-ha](https://github.com/halupa-lab/electros-ev-local-ha) v1.7.0 or newer.
