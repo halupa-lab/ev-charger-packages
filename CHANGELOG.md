@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.0
+
+- New package `ev_charge_now.yaml`: script `script.ev_charge_now` ("Авто: зарядити зараз", the card button) for a one-off charge while "charge only at night" keeps the charger timer on. In the day it holds the home battery, turns night mode off (the timer is cleared), waits for the charger to start by itself and sends start only if it does not. If nothing starts: night mode back on at once and a push.
+- New automation `ev_charge_now_done`: when the one-off charge is over (charging stopped for 10 min or the car unplugged), "charge only at night" is turned back on.
+- New helper `input_boolean.ev_charge_now` ("Авто: разова зарядка зараз") marks a one-off charge.
+
 ## v0.3.0
 
 Needs the ElectroS integration fork v1.8.0 and the charger entities renamed to its English IDs (in HA: entity settings → ↻ "regenerate entity ID").
