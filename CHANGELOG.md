@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.4.4
+
+- `ev_safety_grid_back` resumes with a timer command instead of a start. A start is a one-off override in the charger: it ignores the timer, so a charge resumed at night would not stop at 07:00. Now, when the grid is back and the charger's own timer allows charging at this moment, HA sends the same timer again: that clears the stop, the charger charges and stops at the timer end by itself.
+- The resume follows the charger's timer, not fixed 23:00–07:00 in HA, so it can be tested in the day with any timer window. A push when the charge did not resume.
+
 ## v0.4.3
 
 - `ev_night_timer` runs in `restart` mode and waits 3 s after a mode change, so a quick off-on of "charge only at night" counts once, as the last state. Before, a double toggle queued runs, one of them cleared the timer, and the charger started charging (a timer command also clears a stop in the charger).

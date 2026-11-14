@@ -1,4 +1,4 @@
-# /config/packages/ev/ev_safety.yaml  (v2)
+# /config/packages/ev/ev_safety.yaml  (v3)
 # Safety for EV charging.
 #
 # Facts this file relies on (checked in the ElectroS integration code and the Deye manual):
@@ -12,9 +12,11 @@
 # 1) No grid -> stop charging. Also when there is NO DATA from Deye for 5 minutes while the car charges
 #    (fail-safe: we cannot see the grid, so we assume the worst). Whatever starts charging while
 #    there is no grid (23:00, card button, ElectroS web UI) is stopped again.
-# 2) Grid (or data) is back for 2 minutes -> resume ONLY if charging was stopped by rule 1 and it is
-#    night with night mode on. In the day: only a notification. A manual stop is never undone.
 #    The stop is retried 3 times; if the charger still charges -> urgent push.
+# 2) Grid (or data) is back for 2 minutes -> resume ONLY if charging was stopped by rule 1 and the
+#    charger's own timer allows charging now: HA sends the same timer again. A timer command clears the
+#    stop and the charger stops at the timer end by itself. Not a start: a start is a one-off override
+#    that ignores the timer (it would not stop at 07:00). Otherwise only a notification.
 # 3) Current ceiling 22 A (line 5x2.5, breaker C25) -> set back to 20 A.
 
 input_boolean:
@@ -93,8 +95,8 @@ automation:
             {%- else %}Авто: немає даних з інвертора — зарядку вимкнено{% endif %}
           message: >
             Без мережі машина розряджала б батарею будинку.
-            Коли мережа (і дані з інвертора) повернуться: уночі з «лише вночі» зарядка продовжиться сама,
-            вдень — натисніть «Почати зарядку» на картці.
+            Коли мережа (і дані з інвертора) повернуться: у години таймера зарядки (уночі) зарядка
+            продовжиться сама, в інший час — натисніть «Почати зарядку» на картці.
 
   - id: ev_safety_grid_back
     alias: "Авто: безпека — мережа повернулась"
@@ -111,33 +113,54 @@ automation:
     actions:
       - action: input_boolean.turn_off
         target: { entity_id: input_boolean.ev_paused_no_grid }
+      - variables:
+          t_start: "{{ state_attr('sensor.electros_timer', 'start') }}"
+          t_end: "{{ state_attr('sensor.electros_timer', 'end') }}"
+          # the charger's timer allows charging now (the window may cross midnight)
+          in_window: >
+            {% set n = now().strftime('%H:%M') %}
+            {% if not is_state_attr('sensor.electros_timer', 'enabled', true) or not t_start or not t_end %}false
+            {% elif t_start < t_end %}{{ t_start <= n and n < t_end }}
+            {% else %}{{ n >= t_start or n < t_end }}{% endif %}
       - choose:
           - conditions:
-              - condition: state
-                entity_id: input_boolean.ev_night_mode
-                state: "on"
-              - condition: time
-                after: "23:00:00"
-                before: "07:00:00"
+              - condition: template
+                value_template: "{{ in_window }}"
             sequence:
-              - action: switch.turn_on
-                target: { entity_id: switch.electros_charging }
-                continue_on_error: true
-              - delay: { seconds: 20 }
-              - action: persistent_notification.create
+              # The same timer again: clears the stop, the charger starts and stops at the timer end by itself.
+              - action: electros_ev_local.set_timer
                 data:
-                  notification_id: ev_safety
-                  title: >
-                    {{ 'Авто: мережа повернулась — нічну зарядку продовжено'
-                       if is_state('switch.electros_charging', 'on')
-                       else 'Авто: мережа повернулась, але зарядка НЕ продовжилась' }}
-                  message: "Зарядку було зупинено через відсутність мережі."
+                  start: "{{ t_start }}"
+                  end: "{{ t_end }}"
+                continue_on_error: true
+              - wait_template: "{{ is_state('switch.electros_charging', 'on') }}"
+                timeout: { seconds: 60 }
+              - if:
+                  - condition: state
+                    entity_id: switch.electros_charging
+                    state: "on"
+                then:
+                  - action: persistent_notification.create
+                    data:
+                      notification_id: ev_safety
+                      title: "Авто: мережа повернулась — зарядку продовжено"
+                      message: "Зарядку було зупинено через відсутність мережі. Зупиниться сама о {{ t_end }} (таймер зарядки)."
+                else:
+                  - action: notify.mobile_app_oleksiy_iphone
+                    data:
+                      title: "Авто: мережа повернулась, але зарядка НЕ продовжилась"
+                      message: "Таймер {{ t_start }}–{{ t_end }} надіслано, а зарядка не почала. Гляньте картку."
+                  - action: persistent_notification.create
+                    data:
+                      notification_id: ev_safety
+                      title: "Авто: мережа повернулась, але зарядка НЕ продовжилась"
+                      message: "Таймер {{ t_start }}–{{ t_end }} надіслано, а зарядка не почала."
         default:
           - action: persistent_notification.create
             data:
               notification_id: ev_safety
               title: "Авто: мережа повернулась"
-              message: "Зарядку не продовжено автоматично. Якщо треба — «Почати зарядку» на картці."
+              message: "Зараз не години таймера зарядки, тож сама не продовжилась. Якщо треба — «Почати зарядку» на картці."
 
   - id: ev_safety_current_limit
     alias: "Авто: безпека — струм не більше 22 A"
