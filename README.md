@@ -12,8 +12,7 @@ The dashboard card lives in a separate repository: [ev-charger-card](https://git
 |---|---|
 | `ev_accounting.yaml` | Car power by source, kWh counters, grid cost in UAH, daily and monthly meters |
 | `ev_battery_hold.yaml` | "Hold home battery": raises Deye TOU program SOC while the car charges, restores it after |
-| `ev_night.yaml` | "Charge only at night": sets the timer 23:00–07:00 in the charger and keeps the charger clock right; when charging starts, applies the current set on the card |
-| `ev_charge_now.yaml` | "Charge now" (card button): a one-off charge while night mode is on; night mode comes back when the charge is over |
+| `ev_night.yaml` | "Charge by the timer": sets the timer 23:00–07:00 in the charger and keeps the charger clock right; when charging starts, applies the current set on the card |
 | `ev_safety.yaml` | No grid → take the timer out and stop charging (retried, push when it fails); grid back → timer back; current ceiling 22 A |
 
 ## Requirements

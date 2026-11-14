@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.4.8
+
+- Removed `ev_charge_now.yaml` ("Зарядити зараз" script, `input_boolean.ev_charge_now`, `ev_charge_now_done`): the charger's own start is a one-off charge now (v0.4.7). Needs card v0.3.0 (its "Почати зарядку" is that start); card v0.2.x calls the removed script.
+- `input_boolean.ev_night_mode` is shown as "Авто: заряджати за таймером" (was "… лише вночі"); the entity ID stays.
+
 ## v0.4.7
 
 - A one-off charge works with night mode on. "Start" (card or the charger's web page) is a one-off override of the timer in the charger: it charges at once and the timer reads as off. `ev_day_charge_guard` now stops a day charge only when the timer is in the charger (a real timer failure); in a one-off charge it holds the home battery instead. `ev_night_timer` leaves a one-off charge alone in the day.

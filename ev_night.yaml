@@ -1,11 +1,11 @@
 # /config/packages/ev/ev_night.yaml
 # Night charging through the charger's OWN timer (needs the integration fork electros-ev-local-ha >= 1.7.0).
 #
-# "Заряджати лише вночі" on  -> timer 23:00-07:00 in the charger. Outside the window the charger does not
+# "Заряджати за таймером" (input_boolean.ev_night_mode) on  -> timer 23:00-07:00 in the charger. Outside the window the charger does not
 #   charge at all (even after a start command), so a car plugged in during the day waits quietly
 #   (no start-then-stop, no car beeps), and at 23:00 the charger starts by itself, even if HA is down.
 #   At 07:00 the charger stops by itself.
-# "Заряджати лише вночі" off -> timer cleared: the charger charges as soon as the car is plugged in.
+# "Заряджати за таймером" off -> timer cleared: the charger charges as soon as the car is plugged in.
 #
 # Every timer command also sets the charger clock to HA time: the timer runs on that clock, which drifts
 # about 20 s a day. No confirmation after 3 tries -> push.
@@ -31,13 +31,13 @@
 
 input_boolean:
   ev_night_mode:
-    name: "Авто: заряджати лише вночі"
+    name: "Авто: заряджати за таймером"
     icon: mdi:weather-night
 
 automation:
   - id: ev_night_timer
     alias: "Авто: ніч — таймер у зарядці"
-    description: "Ставить 23:00–07:00 у зарядці, коли «лише вночі» увімкнено, і знімає таймер, коли вимкнено. Заодно виставляє годинник зарядки."
+    description: "Ставить 23:00–07:00 у зарядці, коли «за таймером» увімкнено, і знімає таймер, коли вимкнено. Заодно виставляє годинник зарядки."
     # restart: a new trigger cancels a run still waiting or retrying, so a quick off-on counts once, as the last state.
     mode: restart
     triggers:
