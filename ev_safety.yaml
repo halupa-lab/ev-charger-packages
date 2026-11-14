@@ -1,4 +1,4 @@
-# /config/packages/ev/ev_safety.yaml  (v4)
+# /config/packages/ev/ev_safety.yaml  (v5)
 # Safety for EV charging.
 #
 # Facts this file relies on (checked in the ElectroS integration code and the Deye manual):
@@ -20,6 +20,8 @@
 #    also clears the stop: inside the window the charger charges again and stops at the timer end by
 #    itself; outside it waits for the window. Not a start: a start is a one-off override that ignores
 #    the timer (it would not stop at 07:00). Also checked 3 minutes after an HA restart.
+#    The charger may restart right after the grid is back: HA waits for it, checks the timer is really
+#    back (up to 5 tries) and keeps the kept timer until then; urgent push if it never comes back.
 # 3) Current ceiling 22 A (line 5x2.5, breaker C25) -> set back to 20 A.
 
 input_boolean:
@@ -173,14 +175,56 @@ automation:
             value_template: "{{ restore or in_window }}"
         then:
           # Puts the timer back and clears the stop: inside the window the charger charges again.
-          - action: electros_ev_local.set_timer
-            data:
-              start: "{{ t_start }}"
-              end: "{{ t_end }}"
-            continue_on_error: true
-          - action: input_text.set_value
-            target: { entity_id: input_text.ev_timer_before_no_grid }
-            data: { value: "" }
+          # The charger may restart a minute or two after the grid is back (14.11: a command sent while it
+          # was restarting was lost, and after the restart it had neither the timer nor the stop, so it
+          # charged). So: wait until it answers, send, check the timer is really there; up to 5 tries.
+          # A restart after that keeps the timer.
+          - repeat:
+              sequence:
+                - wait_template: "{{ has_value('sensor.electros_timer') }}"
+                  timeout: { minutes: 3 }
+                - delay: { seconds: 20 }   # a charger that just came back: let it settle
+                - action: electros_ev_local.set_timer
+                  data:
+                    start: "{{ t_start }}"
+                    end: "{{ t_end }}"
+                  continue_on_error: true
+                - if:
+                    - condition: template
+                      value_template: >
+                        {{ not (state_attr('sensor.electros_timer', 'start') == t_start
+                                and state_attr('sensor.electros_timer', 'end') == t_end) and repeat.index < 5 }}
+                  then:
+                    - delay: { seconds: 30 }
+              until:
+                - condition: template
+                  value_template: >
+                    {{ (state_attr('sensor.electros_timer', 'start') == t_start and state_attr('sensor.electros_timer', 'end') == t_end) or repeat.index >= 5 }}
+          - if:
+              - condition: template
+                value_template: >
+                  {{ (state_attr('sensor.electros_timer', 'start') == t_start and state_attr('sensor.electros_timer', 'end') == t_end) }}
+            then:
+              - action: input_text.set_value
+                target: { entity_id: input_text.ev_timer_before_no_grid }
+                data: { value: "" }
+            else:
+              # The kept timer stays in input_text.ev_timer_before_no_grid.
+              - action: notify.mobile_app_oleksiy_iphone
+                data:
+                  title: "Авто: мережа повернулась, але таймер зарядки НЕ повернуто"
+                  message: >
+                    Треба було {{ t_start }}–{{ t_end }}, у зарядці: {{ states('sensor.electros_timer') }}.
+                    Зарядка може заряджати будь-коли. Вимкніть і знову увімкніть «Заряджати лише вночі» на картці.
+                  data:
+                    push:
+                      interruption-level: time-sensitive
+              - action: persistent_notification.create
+                data:
+                  notification_id: ev_safety
+                  title: "Авто: мережа повернулась, але таймер зарядки НЕ повернуто"
+                  message: "Треба було {{ t_start }}–{{ t_end }}, у зарядці: {{ states('sensor.electros_timer') }}."
+              - stop: "Timer not restored"
       - choose:
           - conditions:
               - condition: template

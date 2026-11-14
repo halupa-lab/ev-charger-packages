@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.6
+
+- `ev_safety_grid_back` waits until the charger answers, puts the kept timer back and checks it is really there (up to 5 tries); only then it forgets the kept timer. On 14.11 the charger restarted a minute after the grid came back, the timer command sent during the restart was lost, the kept timer was erased anyway, and after the restart the charger had neither the timer nor the stop, so it charged. Now an urgent push if the timer does not come back.
+
 ## v0.4.5
 
 - No grid inside the timer window: the stop now holds. A stop alone did not: the stored timer came back and the charger charged again at once (owner's test 14.11), so the battery would be drained in a stop-start loop. `ev_safety_grid_lost` now takes the timer out of the charger, keeps it in the new `input_text.ev_timer_before_no_grid`, then stops.
