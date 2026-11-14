@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.3
+
+- `ev_night_timer` runs in `restart` mode and waits 3 s after a mode change, so a quick off-on of "charge only at night" counts once, as the last state. Before, a double toggle queued runs, one of them cleared the timer, and the charger started charging (a timer command also clears a stop in the charger).
+- Timer commands are sent only when needed: on a mode change; with night mode on, daily at 12:00 and when the timer or clock is wrong, never during 23:00–07:00; with night mode off, only when a timer is still in the charger.
+- No tries and no push while the charger is unavailable; it is checked a minute after it comes back. The push is only for a charger that is online but does not confirm.
+
 ## v0.4.2
 
 - `ev_day_charge_guard` acts only 07:05–22:55. The charger clock runs a little fast, so the timer start at the charger's 23:00 could come a few seconds before 23:00 by HA time and be stopped as a daytime start.

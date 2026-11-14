@@ -8,8 +8,16 @@
 # "Заряджати лише вночі" off -> timer cleared: the charger charges as soon as the car is plugged in.
 #
 # Every timer command also sets the charger clock to HA time: the timer runs on that clock, which drifts
-# about 20 s a day. The timer is (re)sent when the mode changes, daily at 12:00, after an HA start, and when
-# the timer or the clock in the charger is not what it should be. No confirmation after 3 tries -> push.
+# about 20 s a day. No confirmation after 3 tries -> push.
+#
+# A timer command ALSO clears a stop: a charger that was stopped (by the card, the no-grid safety, ...) starts
+# charging again if the car is plugged in and the new timer allows it (seen 13.11 21:03). So timer commands are
+# sent only when they are needed:
+#   - the owner changed the mode: always (after 3 s of no further changes; only the last toggle counts);
+#   - night mode on: daily at 12:00 to keep the clock right (the timer forbids charging at that hour anyway),
+#     and when the timer or the clock in the charger is wrong, but never during the night window;
+#   - night mode off: only when a timer is still in the charger.
+# Nothing is sent while the charger is unavailable; it is checked again a minute after it comes back.
 #
 # The charger starts with the current stored in it; ev_current_apply (below) then sends the current set on
 # the card, if it differs.
@@ -25,8 +33,8 @@ automation:
   - id: ev_night_timer
     alias: "Авто: ніч — таймер у зарядці"
     description: "Ставить 23:00–07:00 у зарядці, коли «лише вночі» увімкнено, і знімає таймер, коли вимкнено. Заодно виставляє годинник зарядки."
-    mode: queued
-    max: 3
+    # restart: a new trigger cancels a run still waiting or retrying, so a quick off-on counts once, as the last state.
+    mode: restart
     triggers:
       - trigger: state
         entity_id: input_boolean.ev_night_mode
@@ -38,9 +46,11 @@ automation:
       - trigger: homeassistant
         event: start
         id: start
-      # Someone changed the timer (charger web page) or it got lost: put it back.
+      # The timer changed in the charger (web page, restart) or the charger came back: check it.
+      # Not on unavailable / unknown: there is nothing to talk to then.
       - trigger: state
         entity_id: sensor.electros_timer
+        not_to: ["unavailable", "unknown"]
         for: { minutes: 1 }
         id: check
       - trigger: numeric_state
@@ -57,28 +67,49 @@ automation:
       timer_entity: sensor.electros_timer
       clock_entity: sensor.electros_clock_offset
     actions:
+      - choose:
+          - conditions:
+              - condition: trigger
+                id: start
+            sequence:
+              - delay: { minutes: 1 }   # wait for the ElectroS integration to connect
+          - conditions:
+              - condition: trigger
+                id: mode
+            sequence:
+              - delay: { seconds: 3 }   # a quick off-on restarts this run: only the last state is sent
+      # Charger offline: send nothing and do not push; the `check` trigger runs a minute after it is back.
       - if:
-          - condition: trigger
-            id: start
+          - condition: template
+            value_template: "{{ not has_value(timer_entity) }}"
         then:
-          - delay: { minutes: 1 }   # wait for the ElectroS integration to connect
-      # Mode change and the daily run always send (the daily run keeps the clock right);
-      # the other triggers send only when the charger is not as it should be.
+          - action: logbook.log
+            data:
+              name: "Авто: ніч"
+              message: "Зарядка недоступна — таймер перевірю, коли вона повернеться ({{ trigger.id }})"
+          - stop: "Charger unavailable"
+      - variables:
+          night: "{{ is_state('input_boolean.ev_night_mode', 'on') }}"
+          night_window: "{{ now().hour >= 23 or now().hour < 7 }}"
+          ok_timer: >
+            {{ (is_state_attr(timer_entity, 'enabled', true)
+                and state_attr(timer_entity, 'start') == '23:00'
+                and state_attr(timer_entity, 'end') == '07:00')
+               if night else is_state_attr(timer_entity, 'enabled', false) }}
+          ok_clock: "{{ states(clock_entity) | float(999) | abs <= 60 }}"
+      # When to send (see the header): every send also clears a stop in the charger.
       - condition: template
         value_template: >
-          {% set night = is_state('input_boolean.ev_night_mode', 'on') %}
-          {% set ok_timer = (is_state_attr(timer_entity, 'enabled', true)
-                             and state_attr(timer_entity, 'start') == '23:00'
-                             and state_attr(timer_entity, 'end') == '07:00')
-                            if night else is_state_attr(timer_entity, 'enabled', false) %}
-          {% set ok_clock = states(clock_entity) | float(999) | abs <= 60 %}
-          {{ trigger.id in ['mode', 'daily'] or not (ok_timer and ok_clock) }}
+          {% if trigger.id == 'mode' %}true
+          {% elif not night %}{{ not ok_timer }}
+          {% elif night_window %}false
+          {% elif trigger.id == 'daily' %}true
+          {% else %}{{ not (ok_timer and ok_clock) }}{% endif %}
       - repeat:
           sequence:
             - if:
-                - condition: state
-                  entity_id: input_boolean.ev_night_mode
-                  state: "on"
+                - condition: template
+                  value_template: "{{ night }}"
               then:
                 - action: electros_ev_local.set_timer
                   data: { start: "23:00", end: "07:00" }
@@ -88,7 +119,6 @@ automation:
                   continue_on_error: true
             - variables:
                 ok: >
-                  {% set night = is_state('input_boolean.ev_night_mode', 'on') %}
                   {% set ok_timer = (is_state_attr(timer_entity, 'enabled', true)
                                      and state_attr(timer_entity, 'start') == '23:00'
                                      and state_attr(timer_entity, 'end') == '07:00')
@@ -99,7 +129,7 @@ automation:
                   value_template: "{{ not ok and repeat.index < 3 }}"
               then:
                 - delay: { seconds: 30 }
-          until: "{{ ok or repeat.index >= 3 }}"
+          until: "{{ ok or repeat.index >= 3 or not has_value(timer_entity) }}"
       - if:
           - condition: template
             value_template: "{{ ok }}"
@@ -108,20 +138,30 @@ automation:
             data:
               name: "Авто: ніч"
               message: >
-                {{ 'Таймер 23:00–07:00 у зарядці' if is_state('input_boolean.ev_night_mode', 'on') else 'Таймер у зарядці вимкнено' }},
+                {{ 'Таймер 23:00–07:00 у зарядці' if night else 'Таймер у зарядці вимкнено' }},
                 годинник зарядки виставлено ({{ trigger.id }})
         else:
-          - action: notify.mobile_app_oleksiy_iphone
-            data:
-              title: "Авто: таймер зарядки НЕ встановлено"
-              message: >
-                Зарядка не підтвердила {{ 'таймер 23:00–07:00' if is_state('input_boolean.ev_night_mode', 'on') else 'вимкнення таймера' }}
-                після 3 спроб. Зараз у зарядці: {{ states(timer_entity) }}. Перевірте, чи зарядка на зв'язку.
-          - action: persistent_notification.create
-            data:
-              notification_id: ev_night
-              title: "Авто: таймер зарядки НЕ встановлено"
-              message: "Зарядка не підтвердила таймер після 3 спроб. Зараз у зарядці: {{ states(timer_entity) }}."
+          - if:
+              - condition: template
+                value_template: "{{ not has_value(timer_entity) }}"
+            then:
+              # The charger went away while we were trying: not a failure to report, it is checked on return.
+              - action: logbook.log
+                data:
+                  name: "Авто: ніч"
+                  message: "Зарядка зникла під час встановлення таймера — перевірю, коли повернеться"
+            else:
+              - action: notify.mobile_app_oleksiy_iphone
+                data:
+                  title: "Авто: таймер зарядки НЕ встановлено"
+                  message: >
+                    Зарядка на зв'язку, але не підтвердила {{ 'таймер 23:00–07:00' if night else 'вимкнення таймера' }}
+                    після 3 спроб. Зараз у зарядці: {{ states(timer_entity) }}.
+              - action: persistent_notification.create
+                data:
+                  notification_id: ev_night
+                  title: "Авто: таймер зарядки НЕ встановлено"
+                  message: "Зарядка на зв'язку, але не підтвердила таймер після 3 спроб. Зараз у зарядці: {{ states(timer_entity) }}."
 
   # The card current is the charging current. The charger keeps its own stored current and starts with it
   # (at 23:00 by the timer, or when the car is plugged in); a new current reaches the charger only while it
