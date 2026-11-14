@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.4.5
+
+- No grid inside the timer window: the stop now holds. A stop alone did not: the stored timer came back and the charger charged again at once (owner's test 14.11), so the battery would be drained in a stop-start loop. `ev_safety_grid_lost` now takes the timer out of the charger, keeps it in the new `input_text.ev_timer_before_no_grid`, then stops.
+- `ev_safety_grid_back` puts the kept timer back: inside the window the charger charges again and stops at the timer end; outside it waits for the window. Also checked 3 minutes after an HA restart, so the timer is not lost when HA restarts during an outage.
+- `ev_night_timer` does nothing while charging is paused for no grid.
+
 ## v0.4.4
 
 - `ev_safety_grid_back` resumes with a timer command instead of a start. A start is a one-off override in the charger: it ignores the timer, so a charge resumed at night would not stop at 07:00. Now, when the grid is back and the charger's own timer allows charging at this moment, HA sends the same timer again: that clears the stop, the charger charges and stops at the timer end by itself.

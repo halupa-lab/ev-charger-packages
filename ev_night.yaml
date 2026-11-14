@@ -66,6 +66,11 @@ automation:
     variables:
       timer_entity: sensor.electros_timer
       clock_entity: sensor.electros_clock_offset
+    conditions:
+      # No grid: ev_safety took the timer out on purpose and puts it back when the grid returns.
+      - condition: state
+        entity_id: input_boolean.ev_paused_no_grid
+        state: "off"
     actions:
       - choose:
           - conditions:
