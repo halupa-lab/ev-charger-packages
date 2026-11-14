@@ -2,7 +2,8 @@
 # Hold the home battery while the car charges from the grid.
 # ON:  save SOC of Deye TOU programs 1-6, then raise every program SOC that is below
 #      the current battery SOC up to the current SOC -> the inverter stops discharging the battery.
-# OFF: write the saved values back (all 6, every time).
+# OFF: write the saved values back (all 6, every time), wait 6 min for the real read-back (Solarman polls
+#      these every 300 s) and rewrite what differs; the saved values are forgotten only when all 6 match.
 # Fail-safe: if HA stops in the middle, the battery keeps MORE reserve, not less.
 # Auto OFF: no charging for 15 min, charger switch off for 2 min, or the timer limit.
 
@@ -88,7 +89,8 @@ script:
 
   ev_battery_hold_release:
     alias: "Авто: повернути SOC програм TOU"
-    mode: single
+    # restart: a new release (hold off again) writes all 6 again from the start.
+    mode: restart
     variables:
       programs:
         - number.deye_inverter_program_1_soc
@@ -101,7 +103,6 @@ script:
     sequence:
       - condition: template
         value_template: "{{ saved | count == 6 }}"
-      # Write all 6 every time: the read-back of these values can lag by minutes.
       - repeat:
           for_each: "{{ range(6) | list }}"
           sequence:
@@ -109,14 +110,68 @@ script:
               target: { entity_id: "{{ programs[repeat.item] }}" }
               data: { value: "{{ saved[repeat.item] | int }}" }
             - delay: { seconds: 3 }
-      - action: input_text.set_value
-        target: { entity_id: input_text.ev_battery_hold_backup }
-        data: { value: "" }
-      - action: persistent_notification.create
-        data:
-          notification_id: ev_battery_hold
-          title: "Авто: межі SOC повернуто"
-          message: "Записано: {{ saved | join(', ') }} %."
+      # Check the inverter really has them. Right after a write HA shows the written value at once; the real
+      # read-back comes with the next poll of the "Work Mode" group, every 300 s (ha-solarman deye_p3.yaml).
+      # On 13.11 20:56 program 2 showed 30 when HA wrote it and 32 at the next poll; the next hold then saved
+      # 32 as the original. So: wait 6 min (one poll for sure), compare, rewrite what differs, wait, compare.
+      # The saved values are kept until all 6 match: a hold in between keeps using them. Then a push.
+      - repeat:
+          sequence:
+            # Waits the full 6 min unless the hold is turned on again meanwhile.
+            - wait_template: "{{ is_state('input_boolean.ev_battery_hold', 'on') }}"
+              timeout: { minutes: 6 }
+            # The hold was turned on again: its apply uses the saved values, keep them.
+            - if:
+                - condition: state
+                  entity_id: input_boolean.ev_battery_hold
+                  state: "on"
+              then:
+                - stop: "Hold is on again"
+            - if:
+                - condition: template
+                  value_template: "{{ not (programs | map('states') | map('int', -1) | list == saved | map('int') | list) and repeat.index < 2 }}"
+              then:
+                - repeat:
+                    for_each: "{{ range(6) | list }}"
+                    sequence:
+                      - if:
+                          - condition: template
+                            value_template: "{{ states(programs[repeat.item]) | int(-1) != saved[repeat.item] | int }}"
+                        then:
+                          - action: number.set_value
+                            target: { entity_id: "{{ programs[repeat.item] }}" }
+                            data: { value: "{{ saved[repeat.item] | int }}" }
+                          - delay: { seconds: 3 }
+          until:
+            - condition: template
+              value_template: "{{ (programs | map('states') | map('int', -1) | list == saved | map('int') | list) or repeat.index >= 2 }}"
+      - if:
+          - condition: template
+            value_template: "{{ programs | map('states') | map('int', -1) | list == saved | map('int') | list }}"
+        then:
+          - action: input_text.set_value
+            target: { entity_id: input_text.ev_battery_hold_backup }
+            data: { value: "" }
+          - action: persistent_notification.create
+            data:
+              notification_id: ev_battery_hold
+              title: "Авто: межі SOC повернуто"
+              message: "Записано і перевірено: {{ saved | join(', ') }} %."
+        else:
+          - variables:
+              now_read: "{{ programs | map('states') | join(', ') }}"
+          - action: notify.mobile_app_oleksiy_iphone
+            data:
+              title: "Авто: межі SOC батареї НЕ повернулись"
+              message: >
+                Треба {{ saved | join(', ') }} %, інвертор показує {{ now_read }} %.
+                Збережені значення лишаються, HA спробує ще раз після перезапуску.
+                Перевірте програми TOU в інверторі.
+          - action: persistent_notification.create
+            data:
+              notification_id: ev_battery_hold
+              title: "Авто: межі SOC батареї НЕ повернулись"
+              message: "Треба {{ saved | join(', ') }} %, інвертор показує {{ now_read }} %. Збережені значення лишаються."
 
 automation:
   - id: ev_battery_hold_on

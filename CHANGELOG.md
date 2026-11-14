@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.4.10
+
+- "Hold home battery" off now checks the inverter really took the saved program SOC values back. Right after a write HA shows the written value at once; the real read-back comes with the next poll of these registers (every 300 s). HA waits 6 minutes, compares, rewrites what differs once, waits again, and forgets the saved values only when all 6 match. On 13.11 program 2 read back 32 after HA wrote 30, and the next hold saved 32 as the original: now the saved originals stay until the read-back matches, so a hold in between uses them. Push if they still differ.
+- `ev_battery_hold_release` runs in `restart` mode and stops when the hold is turned on again while it waits.
+
 ## v0.4.9
 
 - Grid back and the charge does not resume by itself (a one-off charge in the day, or outside the timer hours): a push to the phone, not only the HA notification. HA does not start it again; the owner decides.
