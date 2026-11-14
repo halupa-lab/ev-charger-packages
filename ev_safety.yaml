@@ -18,7 +18,8 @@
 #    Retried 3 times; if the charger still charges -> urgent push.
 # 2) Grid (or data) is back for 2 minutes, after rule 1 -> HA puts the kept timer back. A timer command
 #    also clears the stop: inside the window the charger charges again and stops at the timer end by
-#    itself; outside it waits for the window. Not a start: a start is a one-off override that ignores
+#    itself; outside it waits for the window. A charge that is not resumed (one-off, day) -> push: the
+#    owner decides whether to start it again (owner, 14.11). Not a start: a start is a one-off override that ignores
 #    the timer (it would not stop at 07:00). Also checked 3 minutes after an HA restart.
 #    The charger may restart right after the grid is back: HA waits for it, checks the timer is really
 #    back (up to 5 tries) and keeps the kept timer until then; urgent push if it never comes back.
@@ -256,17 +257,27 @@ automation:
               - condition: template
                 value_template: "{{ restore }}"
             sequence:
+              - action: notify.mobile_app_oleksiy_iphone
+                data:
+                  title: "Авто: мережа повернулась, зарядка стоїть"
+                  message: "Таймер {{ t_start }}–{{ t_end }} повернуто, зарядка почне сама за ним. Якщо треба зараз — «Почати зарядку» на картці."
               - action: persistent_notification.create
                 data:
                   notification_id: ev_safety
                   title: "Авто: мережа повернулась — таймер {{ t_start }}–{{ t_end }} повернуто"
                   message: "Зарядка почне сама за таймером. Якщо треба зараз — «Почати зарядку» на картці."
+        # A one-off charge (or a charge without a timer) was stopped for no grid: not resumed on purpose,
+        # the owner decides (owner, 14.11). So a push, not only the HA notification.
         default:
+          - action: notify.mobile_app_oleksiy_iphone
+            data:
+              title: "Авто: мережа повернулась, зарядка стоїть"
+              message: "Зарядку зупинено, поки не було мережі. Сама не продовжиться — якщо треба, «Почати зарядку» на картці."
           - action: persistent_notification.create
             data:
               notification_id: ev_safety
               title: "Авто: мережа повернулась"
-              message: "Зараз не години таймера зарядки, тож сама не продовжилась. Якщо треба — «Почати зарядку» на картці."
+              message: "Зарядку зупинено, поки не було мережі. Сама не продовжилась — якщо треба, «Почати зарядку» на картці."
 
   - id: ev_safety_current_limit
     alias: "Авто: безпека — струм не більше 22 A"

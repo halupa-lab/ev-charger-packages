@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.9
+
+- Grid back and the charge does not resume by itself (a one-off charge in the day, or outside the timer hours): a push to the phone, not only the HA notification. HA does not start it again; the owner decides.
+
 ## v0.4.8
 
 - Removed `ev_charge_now.yaml` ("Зарядити зараз" script, `input_boolean.ev_charge_now`, `ev_charge_now_done`): the charger's own start is a one-off charge now (v0.4.7). Needs card v0.3.0 (its "Почати зарядку" is that start); card v0.2.x calls the removed script.
