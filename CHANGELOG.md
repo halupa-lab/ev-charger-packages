@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.4.7
+
+- A one-off charge works with night mode on. "Start" (card or the charger's web page) is a one-off override of the timer in the charger: it charges at once and the timer reads as off. `ev_day_charge_guard` now stops a day charge only when the timer is in the charger (a real timer failure); in a one-off charge it holds the home battery instead. `ev_night_timer` leaves a one-off charge alone in the day.
+- The override does not stay: unplugging does not end it in the charger (the next plug-in would charge at once). When the one-off charge is over (not charging for 1 minute) `ev_night_timer` sends the timer again; at 23:01 a one-off charge still running is put back on the timer, so it stops at 07:00.
+
 ## v0.4.6
 
 - `ev_safety_grid_back` waits until the charger answers, puts the kept timer back and checks it is really there (up to 5 tries); only then it forgets the kept timer. On 14.11 the charger restarted a minute after the grid came back, the timer command sent during the restart was lost, the kept timer was erased anyway, and after the restart the charger had neither the timer nor the stop, so it charged. Now an urgent push if the timer does not come back.

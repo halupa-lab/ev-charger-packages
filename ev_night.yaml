@@ -11,11 +11,16 @@
 # about 20 s a day. No confirmation after 3 tries -> push.
 #
 # A timer command ALSO clears a stop: a charger that was stopped (by the card, the no-grid safety, ...) starts
-# charging again if the car is plugged in and the new timer allows it (seen 13.11 21:03). So timer commands are
-# sent only when they are needed:
+# charging again if the car is plugged in and the new timer allows it (seen 13.11 21:03).
+# "Start" (card, charger web page) is a one-off override of the timer: the charger charges at once and the
+# timer reads as off until a stop or a timer command ends it. Unplugging does NOT end it: the next plug-in would
+# charge at once, at any hour (owner's tests 14.11). So timer commands are sent only when they are needed:
 #   - the owner changed the mode: always (after 3 s of no further changes; only the last toggle counts);
 #   - night mode on: daily at 12:00 to keep the clock right (the timer forbids charging at that hour anyway),
 #     and when the timer or the clock in the charger is wrong, but never during the night window;
+#   - night mode on and a one-off charge (timer off) runs in the day: nothing, it is the owner's choice;
+#     once it is over (not charging for 1 min: stopped, unplugged, car full) the timer is sent, so the override
+#     does not stay; at night (from 23:00) it is sent at once: the charge goes on by the timer, stops at 07:00;
 #   - night mode off: only when a timer is still in the charger.
 # Nothing is sent while the charger is unavailable; it is checked again a minute after it comes back.
 #
@@ -63,6 +68,16 @@ automation:
         below: -60
         for: { minutes: 1 }
         id: check
+      # A one-off charge is over (stopped, unplugged, car full): end the override.
+      - trigger: state
+        entity_id: switch.electros_charging
+        to: "off"
+        for: { minutes: 1 }
+        id: check
+      # The night starts: a one-off charge still running goes on by the timer.
+      - trigger: time
+        at: "23:01:00"
+        id: check
     variables:
       timer_entity: sensor.electros_timer
       clock_entity: sensor.electros_clock_offset
@@ -102,12 +117,16 @@ automation:
                 and state_attr(timer_entity, 'end') == '07:00')
                if night else is_state_attr(timer_entity, 'enabled', false) }}
           ok_clock: "{{ states(clock_entity) | float(999) | abs <= 60 }}"
+          # a one-off charge: "start" overrides the timer, which then reads as off
+          one_off: "{{ is_state_attr(timer_entity, 'enabled', false) }}"
+          charging: "{{ is_state('switch.electros_charging', 'on') }}"
       # When to send (see the header): every send also clears a stop in the charger.
       - condition: template
         value_template: >
           {% if trigger.id == 'mode' %}true
           {% elif not night %}{{ not ok_timer }}
-          {% elif night_window %}false
+          {% elif one_off and charging and not night_window %}false
+          {% elif night_window %}{{ one_off }}
           {% elif trigger.id == 'daily' %}true
           {% else %}{{ not (ok_timer and ok_clock) }}{% endif %}
       - repeat:
@@ -211,7 +230,9 @@ automation:
                 Змініть струм на картці ще раз.
 
   # Fallback: the car charges in the day without "hold battery".
-  # Night mode on -> the timer did not work: stop and tell. Night mode off -> hold the home battery.
+  # Night mode on and the timer is in the charger -> the timer did not work: stop and tell.
+  # Otherwise (night mode off, or a one-off charge: "start" overrides the timer, which then reads as off)
+  # the owner wants to charge now -> hold the home battery.
   - id: ev_day_charge_guard
     alias: "Авто: зарядка почалась сама вдень"
     triggers:
@@ -235,6 +256,8 @@ automation:
               - condition: state
                 entity_id: input_boolean.ev_night_mode
                 state: "on"
+              - condition: template
+                value_template: "{{ is_state_attr('sensor.electros_timer', 'enabled', true) }}"
             sequence:
               - action: switch.turn_off
                 target: { entity_id: switch.electros_charging }
@@ -251,4 +274,4 @@ automation:
           - action: logbook.log
             data:
               name: "Авто: тримати батарею"
-              message: "Зарядка почалась сама вдень — утримання ввімкнено автоматично"
+              message: "Зарядка вдень — утримання батареї ввімкнено автоматично"
