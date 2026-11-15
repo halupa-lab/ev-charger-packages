@@ -1,4 +1,4 @@
-# /config/packages/ev/ev_safety.yaml  (v5)
+# /config/packages/ev/ev_safety.yaml  (v6)
 # Safety for EV charging.
 #
 # Facts this file relies on (checked in the ElectroS integration code and the Deye manual):
@@ -23,6 +23,7 @@
 #    the timer (it would not stop at 07:00). Also checked 3 minutes after an HA restart.
 #    The charger may restart right after the grid is back: HA waits for it, checks the timer is really
 #    back (up to 5 tries) and keeps the kept timer until then; urgent push if it never comes back.
+#    If the grid goes again meanwhile, it stops at once (pause flag back on): no more timer commands.
 # 3) Current ceiling 22 A (line 5x2.5, breaker C25) -> set back to 20 A.
 
 input_boolean:
@@ -185,6 +186,15 @@ automation:
                 - wait_template: "{{ has_value('sensor.electros_timer') }}"
                   timeout: { minutes: 3 }
                 - delay: { seconds: 20 }   # a charger that just came back: let it settle
+                # The grid went again meanwhile: stop here, as if it never came back. Every timer command clears the
+                # stop, so going on would let the car charge from the battery until grid_lost stops it again.
+                - if:
+                    - condition: template
+                      value_template: "{{ not is_state('binary_sensor.deye_inverter_grid', 'on') }}"
+                  then:
+                    - action: input_boolean.turn_on
+                      target: { entity_id: input_boolean.ev_paused_no_grid }
+                    - stop: "Grid lost again"
                 - action: electros_ev_local.set_timer
                   data:
                     start: "{{ t_start }}"
@@ -226,6 +236,15 @@ automation:
                   title: "Авто: мережа повернулась, але таймер зарядки НЕ повернуто"
                   message: "Треба було {{ t_start }}–{{ t_end }}, у зарядці: {{ states('sensor.electros_timer') }}."
               - stop: "Timer not restored"
+      # The grid went again meanwhile: stop here, as if it never came back. Every timer command clears the
+      # stop, so going on would let the car charge from the battery until grid_lost stops it again.
+      - if:
+          - condition: template
+            value_template: "{{ not is_state('binary_sensor.deye_inverter_grid', 'on') }}"
+        then:
+          - action: input_boolean.turn_on
+            target: { entity_id: input_boolean.ev_paused_no_grid }
+          - stop: "Grid lost again"
       - choose:
           - conditions:
               - condition: template

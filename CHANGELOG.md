@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.11
+
+- `ev_safety_grid_back` stops at once when the grid goes again while it is putting the timer back (it waits for the charger and tries up to 5 times, so this can take minutes). Before, it went on sending the timer; every timer command clears the stop, so inside the timer window the car charged from the battery for a few seconds each time until `grid_lost` stopped it again. The pause flag is set again and the kept timer stays.
+
 ## v0.4.10
 
 - "Hold home battery" off now checks the inverter really took the saved program SOC values back. Right after a write HA shows the written value at once; the real read-back comes with the next poll of these registers (every 300 s). HA waits 6 minutes, compares, rewrites what differs once, waits again, and forgets the saved values only when all 6 match. On 13.11 program 2 read back 32 after HA wrote 30, and the next hold saved 32 as the original: now the saved originals stay until the read-back matches, so a hold in between uses them. Push if they still differ.
