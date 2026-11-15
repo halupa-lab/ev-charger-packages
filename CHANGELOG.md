@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.4.12
+
+- `ev_night_timer` also sends the timer (and sets the charger clock) daily at 22:30, not only at 12:00, so the night starts and ends on the minute: the charger clock runs ~15–20 s a day fast (on 15.11 it stopped at 06:59:54 by HA time). A one-off charge running at 22:30 is left alone, as at 12:00.
+
 ## v0.4.11
 
 - `ev_safety_grid_back` stops at once when the grid goes again while it is putting the timer back (it waits for the charger and tries up to 5 times, so this can take minutes). Before, it went on sending the timer; every timer command clears the stop, so inside the timer window the car charged from the battery for a few seconds each time until `grid_lost` stopped it again. The pause flag is set again and the kept timer stays.

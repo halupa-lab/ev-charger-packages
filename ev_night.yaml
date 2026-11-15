@@ -16,7 +16,7 @@
 # timer reads as off until a stop or a timer command ends it. Unplugging does NOT end it: the next plug-in would
 # charge at once, at any hour (owner's tests 14.11). So timer commands are sent only when they are needed:
 #   - the owner changed the mode: always (after 3 s of no further changes; only the last toggle counts);
-#   - night mode on: daily at 12:00 to keep the clock right (the timer forbids charging at that hour anyway),
+#   - night mode on: daily at 12:00 and 22:30 to keep the clock right (the timer forbids charging then anyway),
 #     and when the timer or the clock in the charger is wrong, but never during the night window;
 #   - night mode on and a one-off charge (timer off) runs in the day: nothing, it is the owner's choice;
 #     once it is over (not charging for 1 min: stopped, unplugged, car full) the timer is sent, so the override
@@ -47,6 +47,11 @@ automation:
         id: mode
       - trigger: time
         at: "12:00:00"
+        id: daily
+      # Again just before the night: the charger clock runs ~15-20 s a day fast, so after a fresh set its
+      # 07:00 stop is on the minute (on 15.11 it stopped at 06:59:54 by HA time).
+      - trigger: time
+        at: "22:30:00"
         id: daily
       - trigger: homeassistant
         event: start
